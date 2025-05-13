@@ -20,46 +20,35 @@ LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID")
 
 async def send_bot_log_message(message_content: str):
     """Envoie un message de log en utilisant l'instance bot principale, avec timestamp de Paris."""
-    # Log pour stdout (console Heroku), on peut le garder en UTC par convention ou aussi le convertir
-    # Pour la console, gardons UTC pour l'instant pour éviter la confusion avec les logs Heroku qui sont en UTC.
-    # print(f"[{discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}] [BOT LOG STDOUT] {message_content}")
+    
+    # 1. Obtenir l'heure actuelle en UTC (objet datetime "aware")
+    now_utc = discord.utils.utcnow() # Fait une seule fois au début
+
+    # 2. Définir le fuseau horaire de Paris
+    paris_tz = pytz.timezone('Europe/Paris')
+
+    # 3. Convertir l'heure UTC en heure de Paris
+    now_paris = now_utc.astimezone(paris_tz)
+
+    # 4. Formater le timestamp pour l'affichage sur Discord
+    timestamp_discord_display = now_paris.strftime('%Y-%m-%d %H:%M:%S %Z') # Ex: 2025-05-13 12:13:43 CEST
+
+    # 5. Formater un timestamp UTC pour les logs console/stdout (optionnel, mais bon pour la cohérence avec Heroku)
+    timestamp_stdout_utc_display = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
 
     if not LOG_CHANNEL_ID or not bot.is_ready():
-        # Si LOG_CHANNEL_ID n'est pas défini ou que le bot n'est pas prêt, log en console
-        # On peut aussi formater ce log console en heure de Paris si souhaité.
-        # Pour l'instant, il n'y a pas de log console si ces conditions sont remplies.
-        # On pourrait ajouter un print ici si on veut absolument un log quelque part.
-        # Par exemple :
-        current_time_for_stdout = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-        print(f"[{current_time_for_stdout}] [BOT LOG STDOUT - CANAL INDISPONIBLE] {message_content}")
+        print(f"[{timestamp_stdout_utc_display}] [BOT LOG STDOUT - CANAL LOG INDISPONIBLE/BOT NON PRET] {message_content}")
         return
 
     try:
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
-            # 1. Obtenir l'heure actuelle en UTC (objet datetime "aware")
-            now_utc = discord.utils.utcnow()
-
-            # 2. Définir le fuseau horaire de Paris
-            paris_tz = pytz.timezone('Europe/Paris')
-
-            # 3. Convertir l'heure UTC en heure de Paris
-            now_paris = now_utc.astimezone(paris_tz)
-
-            # 4. Formater le timestamp pour l'affichage
-            # %Z affichera le nom du fuseau (CET ou CEST)
-            # %z affichera le décalage (+0100 ou +0200)
-            timestamp_display = now_paris.strftime('%Y-%m-%d %H:%M:%S %Z') # Exemple: 2025-05-13 12:13:43 CEST
-
-            await log_channel.send(f"```\n[Bot Auto-Fetch] {timestamp_display}\n{message_content}\n```")
+            # C'EST ICI QU'ON UTILISE LE TIMESTAMP DE PARIS POUR DISCORD
+            await log_channel.send(f"```\n[Bot Auto-Fetch] {timestamp_discord_display}\n{message_content}\n```")
         else:
-            # Si le canal n'est pas trouvé, log en console
-            current_time_for_stdout = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-            print(f"[{current_time_for_stdout}] [BOT LOG STDOUT] Log channel ID {LOG_CHANNEL_ID} non trouvé. Message: {message_content}")
+            print(f"[{timestamp_stdout_utc_display}] [BOT LOG STDOUT] Log channel ID {LOG_CHANNEL_ID} non trouvé. Message: {message_content}")
     except Exception as e:
-        # En cas d'erreur d'envoi, log en console
-        current_time_for_stdout = discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-        print(f"[{current_time_for_stdout}] [BOT LOG STDOUT] Erreur envoi log Discord: {e}. Message: {message_content}")
+        print(f"[{timestamp_stdout_utc_display}] [BOT LOG STDOUT] Erreur envoi log Discord: {e}. Message: {message_content}")
 
 # Conversion des IDs de canaux en entiers (à faire une fois, peut-être après le on_ready ou globalement avec vérification)
 TARGET_CHANNEL_ID = None
