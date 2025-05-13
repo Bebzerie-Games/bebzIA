@@ -1,12 +1,25 @@
-# ... (toutes les importations et chargements de variables d'env en haut) ...
+print("[FETCH_SCRIPT_DEBUG] Le fichier fetch_new_messages.py est en cours d'exécution - VERSION TEST MINIMAL CONNEXION") # Optionnel
+
+import discord # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< CETTE LIGNE EST ESSENTIELLE
+import os
+import datetime
+import json
+from dotenv import load_dotenv
+from azure.cosmos import CosmosClient, PartitionKey, exceptions # Pas utilisé dans le test minimal, mais peut rester
+import asyncio
+import traceback
+
+# Charger les variables d'environnement
+load_dotenv()
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID")
+# COSMOS_DB_ENDPOINT etc. ne sont pas nécessaires pour ce test minimal mais peuvent rester
 
 # --- Configuration Globale du Client Discord (pour les logs) ---
 intents_log = discord.Intents.default()
-# Vous pouvez essayer avec des intents plus spécifiques si le problème persiste
-# intents_log.messages = True # Pour envoyer des messages
 discord_log_client = discord.Client(intents=intents_log)
-LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID") # Assurez-vous qu'il est chargé
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN") # Assurez-vous qu'il est chargé
+
+# ... (le reste du code que je vous ai fourni pour run_script_minimal_connect_test et if __name__ == "__main__") ...
 
 # ... (send_log_message, main_fetch_logic, format_message_to_json peuvent rester définies mais ne seront pas appelées dans ce test)
 
