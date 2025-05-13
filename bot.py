@@ -142,7 +142,7 @@ async def main_message_fetch_logic():
             after_date = datetime.datetime.fromtimestamp(last_message_timestamp_unix + 0.001, tz=datetime.timezone.utc) # +0.001 pour être strictement après
             await send_bot_log_message(f"Dernier message stocké à {datetime.datetime.fromtimestamp(last_message_timestamp_unix, tz=datetime.timezone.utc).isoformat()}. Récupération des messages après cette date.")
         else:
-            after_date = discord.utils.utcnow() - datetime.timedelta(days=7) # Période par défaut
+            after_date = discord.utils.utcnow() - datetime.timedelta(days=14) # Période par défaut
             await send_bot_log_message(f"Aucun message précédent trouvé ou erreur. Récupération des messages des 7 derniers jours (depuis {after_date.isoformat()}).")
 
         new_messages_count = 0
@@ -182,7 +182,7 @@ async def main_message_fetch_logic():
         await send_bot_log_message(f"ERREUR MAJEURE pendant la tâche de récupération des messages:\n{error_details}")
 
 # --- Définition de la tâche en boucle ---
-@tasks.loop(hours=1) # Exécute toutes les heures. Adaptez (minutes=X, seconds=X)
+@tasks.loop(hours=12) # Exécute toutes les heures. Adaptez (minutes=X, seconds=X)
 async def scheduled_message_fetch():
     print(f"[{discord.utils.utcnow().isoformat()}] Tâche de récupération planifiée démarrée.")
     await send_bot_log_message("Démarrage de la tâche de récupération planifiée.")
