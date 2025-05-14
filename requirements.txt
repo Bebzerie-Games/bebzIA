@@ -2,4 +2,4 @@ discord.py
 python-dotenv
 azure-cosmos
 pytz
-openai
+openai>=1.0.0
