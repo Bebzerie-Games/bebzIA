@@ -429,9 +429,9 @@ async def ask_command(ctx, *, question: str):
         return
     # --- Fin de la vérification ---
 
-
     await ctx.send(f"Recherche en cours pour : \"{question}\" ... Veuillez patienter.")
-    generated_sql_query = await get_ai_analysis(question, ctx.author.name)
+
+    # --- Déplacer les vérifications AVANT l'appel à l'IA ou la base de données ---
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
         await ctx.send("Désolé, le module d'intelligence artificielle n'est pas correctement configuré.")
         await send_bot_log_message(f"Cmd !ask par {ctx.author.name} échouée : Azure OpenAI non configuré/client non prêt.", source=log_source)
@@ -441,9 +441,12 @@ async def ask_command(ctx, *, question: str):
         await ctx.send("Désolé, la connexion à la base de données n'est pas active.")
         await send_bot_log_message(f"Cmd !ask par {ctx.author.name} échouée : Client Cosmos DB non initialisé.", source=log_source)
         return
+    # --- Fin des vérifications ---
 
-    generated_sql_query = await get_ai_analysis(question) # get_ai_analysis loggue déjà avec source "AI-QUERY"
+    # --- Appeler get_ai_analysis UNE SEULE fois et PASSER LE NOM DE L'UTILISATEUR ---
+    generated_sql_query = await get_ai_analysis(question, ctx.author.name) # <-- Correct maintenant
 
+    # --- Gérer le résultat de l'appel à l'IA ---
     if not generated_sql_query:
         await ctx.send("Je n'ai pas réussi à interpréter votre question (erreur interne/communication IA).")
         # get_ai_analysis a déjà loggué l'erreur spécifique
@@ -457,6 +460,7 @@ async def ask_command(ctx, *, question: str):
         await ctx.send("L'IA a retourné une réponse dans un format inattendu.")
         return # Log déjà fait par get_ai_analysis
 
+    # --- Le reste de ta fonction (affichage, exécution de la requête Cosmos DB, etc.) ---
     await send_bot_log_message(f"Cmd !ask par {ctx.author.name} pour '{question}'. Requête IA : {generated_sql_query}", source=log_source)
     if len(generated_sql_query) < 1900 : # Pour éviter un message de debug trop long
         await ctx.send(f"Requête générée (débogage) : ```sql\n{generated_sql_query}\n```")
@@ -467,6 +471,8 @@ async def ask_command(ctx, *, question: str):
             query=query_to_execute,
             enable_cross_partition_query=True
         ))
+
+        # ... (Reste de la logique d'affichage des résultats) ...
 
         if not items:
             await ctx.send("J'ai exécuté la recherche, mais aucun message ne correspond à votre demande.")
@@ -479,7 +485,7 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source)
             return
 
-        # --- Début de la boucle d'affichage des résultats (Modifiée pour robustesse) ---
+        # --- Début de la boucle d'affichage des résultats (Déjà modifiée) ---
         response_parts = [f"Voici les messages que j'ai trouvés (jusqu'à {min(len(items), 5)} affichés) :\n"] # Ajuster le message si moins de 5 résultats
         max_messages_to_display = 5
         messages_displayed_count = 0
@@ -509,13 +515,9 @@ async def ask_command(ctx, *, question: str):
                     # Supprimer le 'Z' s'il y a déjà un offset pour fromisoformat
                     if '+' in cleaned_timestamp_str or '-' in cleaned_timestamp_str[10:]: # Présence d'un offset
                          if cleaned_timestamp_str.endswith('Z'):
-                             cleaned_timestamp_str = cleaned_timestamp_str[:-1] # Supprimer le Z
-                    # S'assurer qu'il y a une info de timezone si aucune (assumer UTC si fromisoformat le requiert)
-                    if 'Z' not in cleaned_timestamp_str and '+' not in cleaned_timestamp_str and '-' not in cleaned_timestamp_str[10:]:
-                         # Si pas de Z et pas d'offset, fromisoformat lève une erreur si strict (Python 3.11+ default), ajouter Z
-                         # Cependant, ton Heroku est en Python 3.10, fromisoformat peut être moins strict.
-                         # On va le laisser tel quel, le remplacement '+00:00Z' par 'Z' devrait couvrir le cas problématique identifié.
-                         pass # Pas de nettoyage supplémentaire par défaut
+                             cleaned_timestamp_str = cleaned_timestamp_str[:-1]
+                    cleaned_timestamp_str = timestamp_str.replace("+00:00Z", "Z").replace(".000Z", "Z")
+
 
                     dt_obj = datetime.datetime.fromisoformat(cleaned_timestamp_str)
                     dt_paris = dt_obj.astimezone(pytz.timezone('Europe/Paris'))
