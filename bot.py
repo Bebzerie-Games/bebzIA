@@ -282,25 +282,18 @@ async def main_message_fetch_logic():
 
     await send_bot_log_message(f"Démarrage tâche pour canal ID: {TARGET_CHANNEL_ID}.", source=log_source)
 
-    try:
-        channel_to_fetch = bot.get_channel(TARGET_CHANNEL_ID)
-        if not channel_to_fetch:
-            try:
-                channel_to_fetch = await bot.fetch_channel(TARGET_CHANNEL_ID)
-            except discord.NotFound:
-                await send_bot_log_message(f"ERREUR: Canal {TARGET_CHANNEL_ID} introuvable.", source=log_source)
-                return
-            except discord.Forbidden:
-                await send_bot_log_message(f"ERREUR: Permissions insuffisantes pour fetch canal {TARGET_CHANNEL_ID}.", source=log_source)
-                return
-            except Exception as e:
-                await send_bot_log_message(f"ERREUR fetch_channel {TARGET_CHANNEL_ID}: {e}", source=log_source)
-                return
-        
-        if not channel_to_fetch:
-            await send_bot_log_message(f"ERREUR: Canal {TARGET_CHANNEL_ID} toujours introuvable.", source=log_source)
-            return
+    # --- Configuration de la date de départ pour le fetch ---
+    # Définis cette variable sur une date HISTORIQUE pour forcer une récupération complète.
+    # METS CETTE LIGNE EN COMMENTAIRE (ou sur None) APRES AVOIR FAIT LA RECUPERATION HISTORIQUE !
+    force_historical_fetch_from = datetime.datetime(2022, 10, 1, tzinfo=datetime.timezone.utc) # <-- REMPLACER 2022, 10, 1 par la date souhaitée (ex: date de création du serveur/canal)
+    # force_historical_fetch_from = None # <-- METTRE SUR NONE POUR REPRENDRE LA LOGIQUE NORMALE
 
+    if force_historical_fetch_from:
+        # Si on force une date historique, on utilise celle-ci.
+        after_date = force_historical_fetch_from
+        await send_bot_log_message(f"Récupération historique FORCÉE depuis {after_date.isoformat()}.", source=log_source)
+    else:
+        # Logique normale : reprendre après le dernier message stocké en base.
         last_message_timestamp_unix = 0
         try:
             query = f"SELECT VALUE MAX(c.timestamp_unix) FROM c WHERE c.channel_id = '{str(TARGET_CHANNEL_ID)}'"
@@ -308,19 +301,33 @@ async def main_message_fetch_logic():
             if results and results[0] is not None:
                 last_message_timestamp_unix = results[0]
         except Exception as e:
-            await send_bot_log_message(f"AVERTISSEMENT: Récupération MAX timestamp échouée: {e}. Période par défaut.", source=log_source)
+            await send_bot_log_message(f"AVERTISSEMENT: Récupération MAX timestamp échouée: {e}. Utilisation de la période par défaut.", source=log_source)
 
         if last_message_timestamp_unix > 0:
+            # On ajoute 0.001 seconde pour ne pas refetcher le dernier message déjà stocké
             after_date = datetime.datetime.fromtimestamp(last_message_timestamp_unix + 0.001, tz=datetime.timezone.utc)
             await send_bot_log_message(f"Dernier msg stocké: {after_date.isoformat()}. Récupération après.", source=log_source)
         else:
-            after_date = discord.utils.utcnow() - datetime.timedelta(days=1000)
-            await send_bot_log_message(f"Aucun msg précédent/erreur. Récupération depuis {after_date.isoformat()}.", source=log_source)
+            # Si aucun message précédent trouvé (base vide ou erreur), remonter sur les 14 derniers jours.
+            after_date = discord.utils.utcnow() - datetime.timedelta(days=14)
+            await send_bot_log_message(f"Aucun msg précédent/erreur MAX timestamp. Récupération depuis {after_date.isoformat()} (par défaut).", source=log_source)
+    # --- Fin de la configuration de la date de départ ---
 
-        # new_messages_count = 0 # Commenté ou supprimé car upsert ne distingue pas facilement
-        # existing_messages_count = 0 # Commenté ou supprimé
-        fetched_in_pass = 0 # Compteur pour le total traité/mis à jour
+    # --- Début de la boucle de fetch Discord ---
+    # La méthode history va chercher les messages APRÈS `after_date`, en commençant par les plus anciens si oldest_first=True
+    await send_bot_log_message(f"Lancement de channel_to_fetch.history(after={after_date.isoformat()}, oldest_first=True, limit=None)..", source=log_source)
+    
+    # new_messages_count et existing_messages_count ne sont pas précis avec upsert, on utilise fetched_in_pass
+    # new_messages_count = 0
+    # existing_messages_count = 0
+    fetched_in_pass = 0 # Compteur pour le total traité/mis à jour
 
+    try:
+        # Ici, on utilise `await message.channel.history(...)` plutôt que `await channel_to_fetch.history(...)`
+        # car channel_to_fetch pourrait être un objet Channel simplifié si obtenu via get_channel
+        # alors que message.channel dans on_message est un objet TextChannel complet.
+        # MAIS dans main_message_fetch_logic, on obtient channel_to_fetch via bot.get_channel ou bot.fetch_channel
+        # qui devraient retourner des objets compatibles. Donc channel_to_fetch.history est correct ici.
         async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
             fetched_in_pass +=1
             message_json = format_message_to_json(message)
@@ -338,8 +345,9 @@ async def main_message_fetch_logic():
             except Exception as e: # Capturer d'autres exceptions potentielles lors de l'upsert
                  await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
 
+
             
-            if fetched_in_pass > 0 and fetched_in_pass % 250 == 0: # Log moins fréquent
+            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0: # Log moins fréquent (augmenté à 500)
                 await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
 
         # --- Résumé de la tâche (Compteur simplifié) ---
