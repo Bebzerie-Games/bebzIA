@@ -79,7 +79,7 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
 
 
 # --- Fonction d'analyse IA (Nouvelle API v1.x.x) ---
-async def get_ai_analysis(user_query: str) -> str | None:
+async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | None:
     """
     Interroge Azure OpenAI pour obtenir une requête SQL Cosmos DB basée sur la question de l'utilisateur.
     Retourne la chaîne de la requête SQL ou None en cas d'échec.
@@ -125,7 +125,7 @@ Instructions pour la génération de la requête :
     * Exemple Long : "messages de y'a 3 mois" (si date réf en Mai 2025) -> `STARTSWITH(c.timestamp_iso, "2025-02")`
     * Exemple Long : "messages de l'année dernière" (si date réf en 2025) -> `STARTSWITH(c.timestamp_iso, "2024")`
     * Exemple Long : "messages de décembre 2023" -> `STARTSWITH(c.timestamp_iso, "2023-12")`
-5.  **Pour filtrer par l'auteur d'un message (en utilisant son nom d'utilisateur), utilise IMPÉRATIVEMENT le champ `c.author_name` avec la fonction `CONTAINS`. Ne fais JAMAIS référence à un champ 'author' non défini à la racine.**
+5.  Pour filtrer par l'auteur d'un message (en utilisant son nom d'utilisateur), utilise IMPÉRATIVEMENT le champ c.author_name avec la fonction CONTAINS. Lorsque l'utilisateur fait référence à lui-même ("moi", "j'ai envoyé", "mes messages"), utilise son nom d'utilisateur réel qui t'est fourni en début de prompt ("{requesting_user_name}"). Ne fais JAMAIS référence à un champ 'author' non défini à la racine. 
 6.  Utilise `c.reactions_count` ou `c.attachments_count` si besoin.
 7.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
 8.  Par défaut, trie par `ORDER BY c.timestamp_iso DESC`.
@@ -431,7 +431,7 @@ async def ask_command(ctx, *, question: str):
 
 
     await ctx.send(f"Recherche en cours pour : \"{question}\" ... Veuillez patienter.")
-
+    generated_sql_query = await get_ai_analysis(question, ctx.author.name)
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
         await ctx.send("Désolé, le module d'intelligence artificielle n'est pas correctement configuré.")
         await send_bot_log_message(f"Cmd !ask par {ctx.author.name} échouée : Azure OpenAI non configuré/client non prêt.", source=log_source)
