@@ -53,7 +53,7 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
     paris_tz = pytz.timezone('Europe/Paris')
     now_paris = now_utc.astimezone(paris_tz)
     
-    timestamp_discord_display = now_paris.strftime('%Y-%m-%d %H:%M:%S %Z') 
+    timestamp_discord_display = now_paris.strftime('%Y-%m-%d %H:%M:%S %Z')
     timestamp_stdout_utc_display = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
     log_prefix = f"[{source.upper()}]"
 
@@ -64,6 +64,12 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
     try:
         log_channel_obj = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel_obj:
+            # Tronquer le message si trop long pour Discord (limite 4000 chars dans le contenu d'un message)
+            # Garder de la marge pour le préfixe et le code block
+            max_discord_len = 3800
+            if len(message_content) > max_discord_len:
+                message_content = message_content[:max_discord_len] + "\n... (Tronqué car trop long pour Discord)"
+
             await log_channel_obj.send(f"```\n{log_prefix} {timestamp_discord_display}\n{message_content}\n```")
         else:
             print(f"[{timestamp_stdout_utc_display}] {log_prefix} [LOG STDOUT] Log channel ID {LOG_CHANNEL_ID} non trouvé. Msg: {message_content}")
@@ -279,8 +285,8 @@ async def main_message_fetch_logic():
                 await send_bot_log_message(f"ERREUR: Permissions insuffisantes pour fetch canal {TARGET_CHANNEL_ID}.", source=log_source)
                 return
             except Exception as e:
-                 await send_bot_log_message(f"ERREUR fetch_channel {TARGET_CHANNEL_ID}: {e}", source=log_source)
-                 return
+                await send_bot_log_message(f"ERREUR fetch_channel {TARGET_CHANNEL_ID}: {e}", source=log_source)
+                return
         
         if not channel_to_fetch:
             await send_bot_log_message(f"ERREUR: Canal {TARGET_CHANNEL_ID} toujours introuvable.", source=log_source)
@@ -299,12 +305,12 @@ async def main_message_fetch_logic():
             after_date = datetime.datetime.fromtimestamp(last_message_timestamp_unix + 0.001, tz=datetime.timezone.utc)
             await send_bot_log_message(f"Dernier msg stocké: {after_date.isoformat()}. Récupération après.", source=log_source)
         else:
-            after_date = discord.utils.utcnow() - datetime.timedelta(days=14) 
+            after_date = discord.utils.utcnow() - datetime.timedelta(days=14)
             await send_bot_log_message(f"Aucun msg précédent/erreur. Récupération depuis {after_date.isoformat()}.", source=log_source)
 
-        new_messages_count = 0
-        existing_messages_count = 0
-        fetched_in_pass = 0
+        # new_messages_count = 0 # Commenté ou supprimé car upsert ne distingue pas facilement
+        # existing_messages_count = 0 # Commenté ou supprimé
+        fetched_in_pass = 0 # Compteur pour le total traité/mis à jour
 
         async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
             fetched_in_pass +=1
@@ -312,27 +318,30 @@ async def main_message_fetch_logic():
             item_id = message_json["id"]
 
             try:
-                container_client.read_item(item=item_id, partition_key=item_id)
-                existing_messages_count += 1
-            except exceptions.CosmosResourceNotFoundError:
-                try:
-                    container_client.create_item(body=message_json)
-                    new_messages_count += 1
-                except exceptions.CosmosHttpResponseError as e_create:
-                    await send_bot_log_message(f"ERREUR Cosmos (création) msg {item_id}: {e_create.message}", source=log_source)
-            except exceptions.CosmosHttpResponseError as e_read:
-                await send_bot_log_message(f"ERREUR Cosmos (lecture) msg {item_id}: {e_read.message}", source=log_source)
+                # --- Logique de récupération et stockage avec upsert_item ---
+                # Utilise upsert_item pour créer le document s'il n'existe pas,
+                # ou le mettre à jour s'il existe déjà (avec le format actuel).
+                container_client.upsert_item(body=message_json)
+                # Ici, fetched_in_pass compte le nombre total de messages que nous avons tenté d'upsert.
+
+            except exceptions.CosmosHttpResponseError as e_upsert:
+                 await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
+            except Exception as e: # Capturer d'autres exceptions potentielles lors de l'upsert
+                 await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
+
             
             if fetched_in_pass > 0 and fetched_in_pass % 250 == 0: # Log moins fréquent
-                 await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités...", source=log_source)
+                await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
 
+        # --- Résumé de la tâche (Compteur simplifié) ---
         summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
-                           f"- Traités: {fetched_in_pass}, Nouveaux: {new_messages_count}, Existants: {existing_messages_count}")
+                            f"- Messages traités/mis à jour : {fetched_in_pass}") # Résumé basé sur le compteur de traitement
         await send_bot_log_message(summary_message, source=log_source)
 
-    except Exception as e:
+    except Exception as e: # Capturer les exceptions en dehors de la boucle de fetch
         error_details = traceback.format_exc()
         await send_bot_log_message(f"ERREUR MAJEURE pendant récupération:\n{error_details}", source=log_source)
+
 
 # --- Définition de la tâche en boucle ---
 @tasks.loop(hours=12)
@@ -392,7 +401,7 @@ async def on_ready():
             print(f"AVERTISSEMENT CRITIQUE: {msg}")
             await send_bot_log_message(f"AVERTISSEMENT CRITIQUE: {msg}", source=log_source)
         else:
-             await send_bot_log_message("Tâche de récupération démarrée (LOG_CHANNEL_ID peut manquer, logs sur STDOUT).", source="SCHEDULER")
+            await send_bot_log_message("Tâche de récupération démarrée (LOG_CHANNEL_ID peut manquer, logs sur STDOUT).", source="SCHEDULER")
 
 
 # --- Commandes du Bot ---
@@ -461,27 +470,62 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source)
             return
 
-        response_parts = [f"Voici les messages que j'ai trouvés (jusqu'à 5 affichés) :\n"]
+        # --- Début de la boucle d'affichage des résultats (Modifiée pour robustesse) ---
+        response_parts = [f"Voici les messages que j'ai trouvés (jusqu'à {min(len(items), 5)} affichés) :\n"] # Ajuster le message si moins de 5 résultats
         max_messages_to_display = 5
         messages_displayed_count = 0
 
         for item in items[:max_messages_to_display]:
-            author = item.get("author", {}).get("name", "Auteur inconnu")
-            timestamp = item.get("timestamp", "Date inconnue")
+            # Tenter de lire le format ACTUEL (ajouté par format_message_to_json)
+            author = item.get("author_name")
+            timestamp_str = item.get("timestamp_iso") # Utilise un nom temporel pour éviter conflit
+
+            # Si le format actuel n'est pas trouvé, tenter de lire l'ANCIEN format
+            if author is None:
+                author = item.get("author", {}).get("name", "Auteur inconnu") # Va chercher dans l'objet 'author'
+
+            if timestamp_str is None:
+                timestamp_str = item.get("timestamp", "Date inconnue") # Cherche l'ancienne clé 'timestamp'
+
             content = item.get("content", "*Contenu vide*")
-            
-            try:
-                dt_obj = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                dt_paris = dt_obj.astimezone(pytz.timezone('Europe/Paris'))
-                date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
-            except Exception as e:
-                print(f"Erreur formatage date pour timestamp '{timestamp}': {e}")
-                date_fmt = timestamp
+
+
+            # --- Formatage de la date (Affiner pour différents formats ISO) ---
+            date_fmt = "Date invalide ou manquante" # Valeur par défaut en cas d'échec
+            if timestamp_str and timestamp_str != "Date inconnue":
+                try:
+                    # Tenter de nettoyer le timestamp si nécessaire avant de parser
+                    # Gérer 'Z' et '+HH:MM' potentiellement ensemble ou séparément
+                    cleaned_timestamp_str = timestamp_str
+                    # Supprimer le 'Z' s'il y a déjà un offset pour fromisoformat
+                    if '+' in cleaned_timestamp_str or '-' in cleaned_timestamp_str[10:]: # Présence d'un offset
+                         if cleaned_timestamp_str.endswith('Z'):
+                             cleaned_timestamp_str = cleaned_timestamp_str[:-1] # Supprimer le Z
+                    # S'assurer qu'il y a une info de timezone si aucune (assumer UTC si fromisoformat le requiert)
+                    if 'Z' not in cleaned_timestamp_str and '+' not in cleaned_timestamp_str and '-' not in cleaned_timestamp_str[10:]:
+                         # Si pas de Z et pas d'offset, fromisoformat lève une erreur si strict (Python 3.11+ default), ajouter Z
+                         # Cependant, ton Heroku est en Python 3.10, fromisoformat peut être moins strict.
+                         # On va le laisser tel quel, le remplacement '+00:00Z' par 'Z' devrait couvrir le cas problématique identifié.
+                         pass # Pas de nettoyage supplémentaire par défaut
+
+                    dt_obj = datetime.datetime.fromisoformat(cleaned_timestamp_str)
+                    dt_paris = dt_obj.astimezone(pytz.timezone('Europe/Paris'))
+                    date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
+                except Exception as e:
+                    # Log l'erreur de formatage de date détaillée
+                    print(f"Erreur formatage date pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e}\n{traceback.format_exc()}")
+                    date_fmt = f"Format date inconnu ({timestamp_str[:25]}...)" # Affiche le début du timestamp si échec
+            # -------------------------------------------------------------
 
             display_content = (content[:150] + '...') if len(content) > 150 else content
-            response_parts.append(f"\n**De {author} (le {date_fmt}):**\n```\n{display_content}\n```\n---")
+
+            # --- Ajout à la réponse ---
+            # Ajoute l'ID du message pour faciliter le debug si besoin
+            response_parts.append(f"\n**De {author} (le {date_fmt}):** (ID: {item.get('id', 'N/A')})\n```\n{display_content}\n```\n---")
             messages_displayed_count += 1
-        
+        # --- Fin de la boucle d'affichage ---
+
+
         if len(items) > max_messages_to_display:
             response_parts.append(f"\n*Et {len(items) - max_messages_to_display} autre(s) message(s) trouvé(s).*")
 
