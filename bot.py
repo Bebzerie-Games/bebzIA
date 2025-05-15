@@ -282,6 +282,33 @@ async def main_message_fetch_logic():
 
     await send_bot_log_message(f"Démarrage tâche pour canal ID: {TARGET_CHANNEL_ID}.", source=log_source)
 
+    channel_to_fetch = None # Initialise la variable à None
+
+    # --- Tenter de récupérer l'objet canal ---
+    try:
+        channel_to_fetch = bot.get_channel(TARGET_CHANNEL_ID)
+        if not channel_to_fetch:
+            await send_bot_log_message(f"Canal {TARGET_CHANNEL_ID} non trouvé en cache, tentative de fetch via API.", source=log_source)
+            channel_to_fetch = await bot.fetch_channel(TARGET_CHANNEL_ID)
+
+        # Vérifier si l'objet canal a été obtenu avec succès
+        if not channel_to_fetch:
+             await send_bot_log_message(f"ERREUR CRITIQUE: Canal {TARGET_CHANNEL_ID} introuvable ou inaccessible après bot.get_channel et bot.fetch_channel. Abandon.", source=log_source)
+             return # Quitter la fonction si le canal n'est pas trouvé
+
+    except discord.NotFound:
+        await send_bot_log_message(f"ERREUR: Canal {TARGET_CHANNEL_ID} introuvable lors de la tentative de fetch.", source=log_source)
+        return # Quitter la fonction en cas d'erreur spécifique
+    except discord.Forbidden:
+        await send_bot_log_message(f"ERREUR: Permissions insuffisantes pour accéder au canal {TARGET_CHANNEL_ID}.", source=log_source)
+        return # Quitter la fonction en cas d'erreur spécifique
+    except Exception as e: # Capturer toute autre erreur pendant la récupération du canal
+        error_details = traceback.format_exc()
+        await send_bot_log_message(f"ERREUR inattendue lors de la récupération du canal {TARGET_CHANNEL_ID}:\n{error_details}", source=log_source)
+        return # Quitter la fonction en cas d'erreur
+
+    # --- Si on arrive ici, channel_to_fetch est défini et valide ---
+
     # --- Configuration de la date de départ pour le fetch ---
     # Définis cette variable sur une date HISTORIQUE pour forcer une récupération complète.
     # METS CETTE LIGNE EN COMMENTAIRE (ou sur None) APRES AVOIR FAIT LA RECUPERATION HISTORIQUE !
@@ -314,50 +341,35 @@ async def main_message_fetch_logic():
     # --- Fin de la configuration de la date de départ ---
 
     # --- Début de la boucle de fetch Discord ---
-    # La méthode history va chercher les messages APRÈS `after_date`, en commençant par les plus anciens si oldest_first=True
     await send_bot_log_message(f"Lancement de channel_to_fetch.history(after={after_date.isoformat()}, oldest_first=True, limit=None)..", source=log_source)
-    
-    # new_messages_count et existing_messages_count ne sont pas précis avec upsert, on utilise fetched_in_pass
-    # new_messages_count = 0
-    # existing_messages_count = 0
-    fetched_in_pass = 0 # Compteur pour le total traité/mis à jour
 
-    try:
-        # Ici, on utilise `await message.channel.history(...)` plutôt que `await channel_to_fetch.history(...)`
-        # car channel_to_fetch pourrait être un objet Channel simplifié si obtenu via get_channel
-        # alors que message.channel dans on_message est un objet TextChannel complet.
-        # MAIS dans main_message_fetch_logic, on obtient channel_to_fetch via bot.get_channel ou bot.fetch_channel
-        # qui devraient retourner des objets compatibles. Donc channel_to_fetch.history est correct ici.
-        async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
-            fetched_in_pass +=1
-            message_json = format_message_to_json(message)
-            item_id = message_json["id"]
+    fetched_in_pass = 0
 
-            try:
-                # --- Logique de récupération et stockage avec upsert_item ---
-                # Utilise upsert_item pour créer le document s'il n'existe pas,
-                # ou le mettre à jour s'il existe déjà (avec le format actuel).
-                container_client.upsert_item(body=message_json)
-                # Ici, fetched_in_pass compte le nombre total de messages que nous avons tenté d'upsert.
+    async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
+        fetched_in_pass +=1
+        message_json = format_message_to_json(message)
+        item_id = message_json["id"]
 
-            except exceptions.CosmosHttpResponseError as e_upsert:
-                 await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
-            except Exception as e: # Capturer d'autres exceptions potentielles lors de l'upsert
-                 await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
+        # --- Logique de récupération et stockage avec upsert_item ---
+        try:
+            container_client.upsert_item(body=message_json)
+        except exceptions.CosmosHttpResponseError as e_upsert:
+             await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
+        except Exception as e:
+             await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
 
+        
+        if fetched_in_pass > 0 and fetched_in_pass % 500 == 0:
+            await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
 
-            
-            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0: # Log moins fréquent (augmenté à 500)
-                await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
+    # --- Résumé de la tâche ---
+    summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
+                        f"- Messages traités/mis à jour : {fetched_in_pass}")
+    await send_bot_log_message(summary_message, source=log_source)
 
-        # --- Résumé de la tâche (Compteur simplifié) ---
-        summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
-                            f"- Messages traités/mis à jour : {fetched_in_pass}") # Résumé basé sur le compteur de traitement
-        await send_bot_log_message(summary_message, source=log_source)
-
-    except Exception as e: # Capturer les exceptions en dehors de la boucle de fetch
-        error_details = traceback.format_exc()
-        await send_bot_log_message(f"ERREUR MAJEURE pendant récupération:\n{error_details}", source=log_source)
+    # NOTE: Le bloc except Exception as e: à la fin de la fonction principale
+    # gère les erreurs *pendant* la boucle history, pas avant que channel_to_fetch soit défini.
+    # Les exceptions spécifiques discord.NotFound et discord.Forbidden sont maintenant gérées plus tôt.
 
 
 # --- Définition de la tâche en boucle ---
