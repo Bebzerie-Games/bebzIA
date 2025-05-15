@@ -11,6 +11,7 @@ import pytz
 # Charger les variables d'environnement
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+ALLOWED_USER_ID_STR = os.getenv("ALLOWED_USER_ID")
 COSMOS_DB_ENDPOINT = os.getenv("COSMOS_DB_ENDPOINT")
 COSMOS_DB_KEY = os.getenv("COSMOS_DB_KEY")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
@@ -119,13 +120,17 @@ Instructions pour la génération de la requête :
 7.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
 8.  Par défaut, trie par `ORDER BY c.timestamp_iso DESC`.
 9.  Pour "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
-10. Pour "le dernier message", utilise `ORDER BY c.timestamp_iso DESC` et `TOP 1`.
+10. Pour limiter le nombre de résultats retournés (par exemple, "le dernier message", "les 5 messages les plus récents"), utilise la clause `TOP N` (où N est le nombre désiré) **juste après le `SELECT`**.
 
 Exemples (date de référence 2025-05-14 Paris) :
 - Utilisateur: "Messages de FlyXOwl hier"
   IA: SELECT * FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) AND STARTSWITH(c.timestamp_iso, "2025-05-13") ORDER BY c.timestamp_iso DESC
 - Utilisateur: "Combien de messages le 1er janvier 2025 ?"
   IA: SELECT VALUE COUNT(1) FROM c WHERE STARTSWITH(c.timestamp_iso, "2025-01-01")
+- **(NOUVEL EXEMPLE/CLARIFICATION)** Utilisateur: "le premier message"
+  IA: SELECT TOP 1 * FROM c ORDER BY c.timestamp_iso ASC
+- **(NOUVEL EXEMPLE)** Utilisateur: "les 5 derniers messages de FlyXOwl"
+  IA: SELECT TOP 5 * FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) ORDER BY c.timestamp_iso DESC
 
 Question de l'utilisateur :
 """
@@ -197,11 +202,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- Conversion des IDs de canaux ---
 TARGET_CHANNEL_ID = None
 LOG_CHANNEL_ID = None
+ALLOWED_USER_ID = None
+
 try:
     if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
-    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR) 
+    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
+    # --- Conversion du nouvel ID utilisateur ---
+    if ALLOWED_USER_ID_STR: ALLOWED_USER_ID = int(ALLOWED_USER_ID_STR)
+    # ---------------------------------------
 except ValueError:
-    print("ERREUR CRITIQUE: TARGET_CHANNEL_ID ou LOG_CHANNEL_ID n'est pas un entier valide.")
+    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide.")
 
 # --- Initialisation du client Cosmos DB ---
 cosmos_client_instance_global = None # Renommé pour éviter confusion avec le module 'CosmosClient'
@@ -393,6 +403,15 @@ async def ping(ctx):
 @bot.command(name='ask', help="Pose une question sur l'historique des messages. L'IA tentera de trouver les messages pertinents.")
 async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD"
+
+    # --- vérification de l'utilisateur ---
+    if ALLOWED_USER_ID is not None and ctx.author.id != ALLOWED_USER_ID:
+        print(f"Tentative d'utiliser !ask par utilisateur non autorisé: {ctx.author.name} (ID: {ctx.author.id})")
+        await ctx.send("Désolé, cette commande est actuellement restreinte.")
+        return
+    # --- Fin de la vérification ---
+
+
     await ctx.send(f"Recherche en cours pour : \"{question}\" ... Veuillez patienter.")
 
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
