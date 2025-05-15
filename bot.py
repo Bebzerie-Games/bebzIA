@@ -104,16 +104,16 @@ Contexte de la base de données :
     "reactions_count": "integer (nombre total de réactions)"
   }}
 - Le champ `timestamp_iso` est crucial pour les requêtes basées sur le temps. Il est stocké au format ISO 8601 UTC.
-- La date et l'heure actuelles de référence (Paris) sont : {system_current_time_reference}. Utilise cette information pour interpréter les références temporelles relatives (par exemple, "hier", "la semaine dernière"). Convertis TOUJOURS ces références en dates et heures UTC ISO 8601 spécifiques pour la requête. Par exemple, si la référence est "hier" et que l'heure actuelle de référence est '2025-05-14 ... Paris', alors "hier" correspond au jour '2025-05-13' UTC pour les filtres STARTSWITH.
+- La date et l'heure actuelles de référence (Paris) sont : {system_current_time_reference}. Utilise cette information pour interpréter les références temporelles relatives (par exemple, "hier", "la semaine dernière"). Convertis TOUJOURS ces références en dates et heures UTC ISO 8601 spécifiques pour la requête. Par exemple, si la référence est "hier" et que l'heure actuelle de référence est '2025-05-14 ... Paris', alors "yesterday" correspond au jour '2025-05-13' UTC pour les filtres STARTSWITH.
 
 Instructions pour la génération de la requête :
 1.  Ta sortie doit être UNIQUEMENT la requête SQL. Ne fournis aucune explication, aucun texte avant ou après la requête.
 2.  Utilise `c` comme alias pour le conteneur (par exemple, `SELECT * FROM c`).
 3.  Pour les recherches de texte dans `c.content` ou `c.author_name`, utilise la fonction `CONTAINS(c.field, "terme", true)` pour des recherches insensibles à la casse.
 4.  Pour les dates (champ `c.timestamp_iso`) :
-    *   Si l'utilisateur demande des messages d'une date spécifique (ex: "15 octobre 2023"), la requête doit filtrer sur `STARTSWITH(c.timestamp_iso, "YYYY-MM-DD")`.
-    *   Pour des plages de dates (ex: "entre le 10 et le 15 octobre"), utilise `c.timestamp_iso >= "YYYY-MM-DDT00:00:00.000Z" AND c.timestamp_iso <= "YYYY-MM-DDT23:59:59.999Z"`.
-    *   Pour "aujourd'hui", "hier", etc., calcule les dates UTC exactes correspondantes.
+    * Si l'utilisateur demande des messages d'une date spécifique (ex: "15 octobre 2023"), la requête doit filtrer sur `STARTSWITH(c.timestamp_iso, "YYYY-MM-DD")`.
+    * Pour des plages de dates (ex: "entre le 10 et le 15 octobre"), utilise `c.timestamp_iso >= "YYYY-MM-DDT00:00:00.000Z" AND c.timestamp_iso <= "YYYY-MM-DDT23:59:59.999Z"`.
+    * Pour "aujourd'hui", "hier", etc., calcule les dates UTC exactes correspondantes.
 5.  Filtre sur `c.author_name` pour les auteurs.
 6.  Utilise `c.reactions_count` ou `c.attachments_count` si besoin.
 7.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
@@ -132,7 +132,8 @@ Question de l'utilisateur :
 
     try:
         print(f"Tentative d'appel à Azure OpenAI avec la question : {user_query}")
-        response = await azure_openai_client.chat.completions.create( # Utilisation du client instancié
+        # LIGNE CORRIGEE ICI : Utilisation de l'instance azure_openai_client
+        response = await azure_openai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME, # 'model' est utilisé pour le nom du déploiement
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -149,11 +150,11 @@ Question de l'utilisateur :
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             generated_query = response.choices[0].message.content.strip()
             print(f"Requête SQL générée par l'IA : {generated_query}")
-            
+
             if "NO_QUERY_POSSIBLE" in generated_query:
                 await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'", source="AI-QUERY")
                 return "NO_QUERY_POSSIBLE"
-            
+
             if not generated_query.upper().startswith("SELECT"):
                 await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'", source="AI-QUERY")
                 return "INVALID_QUERY_FORMAT"
