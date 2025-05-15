@@ -104,23 +104,27 @@ Contexte de la base de données :
     "id": "string (identifiant unique du message)",
     "channel_id": "string",
     "author_id": "string",
-    "author_name": "string (nom d'utilisateur Discord, ex: 'FlyXOwl')",
+    "author": "string (nom d'utilisateur Discord, ex: 'FlyXOwl')",
     "content": "string (contenu textuel du message)",
     "timestamp_iso": "string (timestamp ISO 8601 UTC, ex: '2023-10-15T12:30:45.123Z')",
     "attachments_count": "integer (nombre de pièces jointes)",
     "reactions_count": "integer (nombre total de réactions)"
   }}
 - Le champ `timestamp_iso` est crucial pour les requêtes basées sur le temps. Il est stocké au format ISO 8601 UTC.
-- La date et l'heure actuelles de référence (Paris) sont : {system_current_time_reference}. Utilise cette information pour interpréter les références temporelles relatives (par exemple, "hier", "la semaine dernière"). Convertis TOUJOURS ces références en dates et heures UTC ISO 8601 spécifiques pour la requête. Par exemple, si la référence est "hier" et que l'heure actuelle de référence est '2025-05-14 ... Paris', alors "yesterday" correspond au jour '2025-05-13' UTC pour les filtres STARTSWITH.
+- La date et l'heure actuelles de référence (Paris) sont : {system_current_time_reference}.
 
 Instructions pour la génération de la requête :
 1.  Ta sortie doit être UNIQUEMENT la requête SQL. Ne fournis aucune explication, aucun texte avant ou après la requête.
 2.  Utilise `c` comme alias pour le conteneur (par exemple, `SELECT * FROM c`).
 3.  Pour les recherches de texte dans `c.content` ou `c.author_name`, utilise la fonction `CONTAINS(c.field, "terme", true)` pour des recherches insensibles à la casse.
 4.  Pour les dates (champ `c.timestamp_iso`) :
-    * Si l'utilisateur demande des messages d'une date spécifique (ex: "15 octobre 2023"), la requête doit filtrer sur `STARTSWITH(c.timestamp_iso, "YYYY-MM-DD")`.
-    * Pour des plages de dates (ex: "entre le 10 et le 15 octobre"), utilise `c.timestamp_iso >= "YYYY-MM-DDT00:00:00.000Z" AND c.timestamp_iso <= "YYYY-MM-DDT23:59:59.999Z"`.
-    * Pour "aujourd'hui", "hier", etc., calcule les dates UTC exactes correspondantes.
+    * Utilise la date et l'heure de référence ({system_current_time_reference}) pour interpréter les références temporelles relatives. Convertis-les en filtres sur `c.timestamp_iso` au format UTC ISO 8601 :
+    * Pour les périodes courtes ("aujourd'hui", "hier", "cette semaine", "la semaine dernière", "les N derniers jours/heures") : utilise des plages précises (`>=` et `<=`) ou `STARTSWITH("YYYY-MM-DD")`. Calcule les dates/heures UTC exactes correspondantes.
+    * Pour les périodes plus longues ("il y a X mois", "en YYYY", "l'année dernière", "le mois dernier") : utilise `STARTSWITH("YYYY-MM")` pour un mois entier ou `STARTSWITH("YYYY")` pour une année entière. Ne calcule PAS une date précise au jour près.
+    * Exemple Court : "messages d'hier" (si date réf 2025-05-15) -> `STARTSWITH(c.timestamp_iso, "2025-05-14")`
+    * Exemple Long : "messages de y'a 3 mois" (si date réf en Mai 2025) -> `STARTSWITH(c.timestamp_iso, "2025-02")`
+    * Exemple Long : "messages de l'année dernière" (si date réf en 2025) -> `STARTSWITH(c.timestamp_iso, "2024")`
+    * Exemple Long : "messages de décembre 2023" -> `STARTSWITH(c.timestamp_iso, "2023-12")`
 5.  Filtre sur `c.author_name` pour les auteurs.
 6.  Utilise `c.reactions_count` ou `c.attachments_count` si besoin.
 7.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
@@ -128,15 +132,17 @@ Instructions pour la génération de la requête :
 9.  Pour "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
 10. Pour limiter le nombre de résultats retournés (par exemple, "le dernier message", "les 5 messages les plus récents"), utilise la clause `TOP N` (où N est le nombre désiré) **juste après le `SELECT`**.
 
-Exemples (date de référence 2025-05-14 Paris) :
+Exemples (date de référence 2025-05-15 Paris) :
 - Utilisateur: "Messages de FlyXOwl hier"
-  IA: SELECT * FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) AND STARTSWITH(c.timestamp_iso, "2025-05-13") ORDER BY c.timestamp_iso DESC
+  IA: SELECT * FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) AND STARTSWITH(c.timestamp_iso, "2025-05-14") ORDER BY c.timestamp_iso DESC
 - Utilisateur: "Combien de messages le 1er janvier 2025 ?"
-  IA: SELECT VALUE COUNT(1) FROM c WHERE STARTSWITH(c.timestamp_iso, "2025-01-01")
-- **(NOUVEL EXEMPLE/CLARIFICATION)** Utilisateur: "le premier message"
+  IA: SELECT VALUE COUNT(1) FROM c WHERE STARTSWITH(c.timestamp_iso, "2025-01-01T")
+- Utilisateur: "le premier message"
   IA: SELECT TOP 1 * FROM c ORDER BY c.timestamp_iso ASC
-- **(NOUVEL EXEMPLE)** Utilisateur: "les 5 derniers messages de FlyXOwl"
+- Utilisateur: "les 5 derniers messages de FlyXOwl"
   IA: SELECT TOP 5 * FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) ORDER BY c.timestamp_iso DESC
+- Utilisateur: "messages de airzya d'il y a 3 mois"
+  IA: SELECT * FROM c WHERE CONTAINS(c.author_name, "airzya", true) AND STARTSWITH(c.timestamp_iso, "2025-02") ORDER BY c.timestamp_iso DESC
 
 Question de l'utilisateur :
 """
