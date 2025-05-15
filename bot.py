@@ -404,7 +404,7 @@ async def ping(ctx):
 async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD"
 
-    # --- vérification de l'utilisateur ---
+    # --- Nouvelle vérification de l'utilisateur ---
     if ALLOWED_USER_ID is not None and ctx.author.id != ALLOWED_USER_ID:
         print(f"Tentative d'utiliser !ask par utilisateur non autorisé: {ctx.author.name} (ID: {ctx.author.id})")
         await ctx.send("Désolé, cette commande est actuellement restreinte.")
@@ -466,18 +466,19 @@ async def ask_command(ctx, *, question: str):
         messages_displayed_count = 0
 
         for item in items[:max_messages_to_display]:
-            author = item.get("author_name", "Auteur inconnu")
-            timestamp = item.get("timestamp_iso", "Date inconnue")
+            author = item.get("author", {}).get("name", "Auteur inconnu")
+            timestamp = item.get("timestamp", "Date inconnue")
             content = item.get("content", "*Contenu vide*")
             
             try:
                 dt_obj = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 dt_paris = dt_obj.astimezone(pytz.timezone('Europe/Paris'))
                 date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
-            except: date_fmt = timestamp
+            except Exception as e:
+                print(f"Erreur formatage date pour timestamp '{timestamp}': {e}")
+                date_fmt = timestamp
 
             display_content = (content[:150] + '...') if len(content) > 150 else content
-            
             response_parts.append(f"\n**De {author} (le {date_fmt}):**\n```\n{display_content}\n```\n---")
             messages_displayed_count += 1
         
