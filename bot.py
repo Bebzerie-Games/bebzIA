@@ -314,7 +314,7 @@ async def main_message_fetch_logic():
             after_date = datetime.datetime.fromtimestamp(last_message_timestamp_unix + 0.001, tz=datetime.timezone.utc)
             await send_bot_log_message(f"Dernier msg stocké: {after_date.isoformat()}. Récupération après.", source=log_source)
         else:
-            after_date = discord.utils.utcnow() - datetime.timedelta(days=14)
+            after_date = discord.utils.utcnow() - datetime.timedelta(days=1000)
             await send_bot_log_message(f"Aucun msg précédent/erreur. Récupération depuis {after_date.isoformat()}.", source=log_source)
 
         # new_messages_count = 0 # Commenté ou supprimé car upsert ne distingue pas facilement
