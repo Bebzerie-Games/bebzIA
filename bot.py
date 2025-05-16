@@ -541,32 +541,36 @@ async def ask_command(ctx, *, question: str):
             content = item.get("content", "*Contenu vide*")
 
 
-            # --- Formatage de la date (Affiner pour différents formats ISO) ---
-            date_fmt = "Date invalide ou manquante" # Valeur par défaut en cas d'échec
-            if timestamp_str and timestamp_str != "Date inconnue":
+# --- Formatage de la date ---
+            date_fmt = "Date invalide ou manquante" # Valeur par défaut
+            timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
+
+            # Si 'timestamp_iso' n'est pas trouvé, essaie l'ancienne clé 'timestamp'
+            if timestamp_str is None:
+                timestamp_str = item.get("timestamp") 
+
+            if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
                 try:
-                    # Tenter de nettoyer le timestamp si nécessaire avant de parser
-                    # Gérer 'Z' et '+HH:MM' potentiellement ensemble ou séparément
-                    cleaned_timestamp_str = timestamp_str
-                    # Supprimer le 'Z' s'il y a déjà un offset pour fromisoformat
-                    if '+' in cleaned_timestamp_str or '-' in cleaned_timestamp_str[10:]: # Présence d'un offset
-                         if cleaned_timestamp_str.endswith('Z'):
-                             cleaned_timestamp_str = cleaned_timestamp_str[:-1] # Supprimer le Z
-                    # S'assurer qu'il y a une info de timezone si aucune (assumer UTC si fromisoformat le requiert)
-                    # Cette partie peut être omise si fromisoformat est assez flexible (Python 3.11+)
-                    # Pour Python 3.10 (Heroku), fromisoformat gère bien les offsets et les Z séparés.
-                    # Le problème identifié précédemment était '+00:00Z'. Le remplacer par 'Z' était un bon nettoyage.
-                    # Conservons la logique de nettoyage du timestamp problématique.
-                    cleaned_timestamp_str = timestamp_str.replace("+00:00Z", "Z").replace(".000Z", "Z")
+                    # Utilise fromisoformat() directement. Il gère la plupart des formats ISO 8601
+                    dt_obj = datetime.datetime.fromisoformat(timestamp_str)
 
+                    # Si fromisoformat() ne rend pas l'objet conscient du fuseau horaire,
+                    # assume qu'il est en UTC (car c'est le format que notre fetcher utilise)
+                    if dt_obj.tzinfo is None:
+                         dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
 
-                    dt_obj = datetime.datetime.fromisoformat(cleaned_timestamp_str)
-                    dt_paris = dt_obj.astimezone(pytz.timezone('Europe/Paris'))
+                    # Convertir en heure de Paris pour l'affichage
+                    paris_tz = pytz.timezone('Europe/Paris')
+                    dt_paris = dt_obj.astimezone(paris_tz)
+                    
+                    # Formater la date pour l'affichage
                     date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
+
                 except Exception as e:
-                    # Log l'erreur de formatage de date détaillée
+                    # Log l'erreur de formatage de date détaillée pour debug si ça échoue encore
                     print(f"Erreur formatage date pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e}\n{traceback.format_exc()}")
-                    date_fmt = f"Format date inconnu ({timestamp_str[:25]}...)" # Affiche le début du timestamp si échec
+                    # Affiche le début de la chaîne de timestamp dans le message d'erreur Discord
+                    date_fmt = f"Format date inconnu ({timestamp_str[:30]}...)" 
             # -------------------------------------------------------------
 
             display_content = (content[:150] + '...') if len(content) > 150 else content
