@@ -543,54 +543,66 @@ async def ask_command(ctx, *, question: str):
 
 
 # --- Formatage de la date ---
-        date_fmt = "Date invalide ou manquante" # Valeur par défaut
-        timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
+            date_fmt = "Date invalide ou manquante" # Valeur par défaut
+            timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
 
-        # Fallback à l'ancienne clé si la nouvelle n'est pas trouvée
-        if timestamp_str is None:
-            timestamp_str = item.get("timestamp") 
+            # Fallback à l'ancienne clé si la nouvelle n'est pas trouvée
+            if timestamp_str is None:
+                timestamp_str = item.get("timestamp") 
 
-        dt_obj = None # Initialise l'objet date à None
+            dt_obj = None # Initialise l'objet date à None
 
-        if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
-            try:
-                # Tente de parser la date en utilisant fromisoformat() (standard et rapide)
-                dt_obj = datetime.datetime.fromisoformat(timestamp_str)
+            if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
+                
+                # --- Nettoyage spécifique pour formats problématiques ---
+                # Nettoie la chaîne pour gérer le format non standard '+00:00Z'
+                cleaned_timestamp_str = timestamp_str.replace('+00:00Z', 'Z')
+                # Si d'autres formats problématiques apparaissent, ajoute des .replace() ici
+                # Exemple: cleaned_timestamp_str = cleaned_timestamp_str.replace('+00:...', '+00:00') 
+                
+                # print(f"DEBUG: Timestamp original: '{timestamp_str}'") # Optionnel: debug
+                # print(f"DEBUG: Timestamp nettoyé: '{cleaned_timestamp_str}'") # Optionnel: debug
 
-            except ValueError:
-                # Si fromisoformat() échoue (par exemple, format non standard),
-                # essaie de parser avec dateutil.parser.isoparse (plus flexible)
+                # --- Tentative de parsing ---
                 try:
-                     dt_obj = dateutil.parser.isoparse(timestamp_str)
-                except Exception as e_parse:
-                     # Si les deux méthodes de parsing échouent, log l'erreur et utilise le format de secours
-                     print(f"Erreur parsing date avec fromisoformat et dateutil pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
-                     date_fmt = f"Format date inconnu ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne pour debug
-                     # dt_obj reste None dans ce cas
+                    # Tente de parser la date en utilisant fromisoformat() (standard et rapide)
+                    # Utilise la chaîne nettoyée
+                    dt_obj = datetime.datetime.fromisoformat(cleaned_timestamp_str)
 
-            if dt_obj: # Si le parsing a réussi avec l'une des méthodes
-                try:
-                    # S'assurer que l'objet datetime est conscient du fuseau horaire.
-                    # fromisoformat/isoparse devrait le faire si le Z ou l'offset est présent,
-                    # mais cette vérification ajoute de la robustesse.
-                    if dt_obj.tzinfo is None:
-                         # Si pas de timezone info, assume UTC (car notre fetcher vise UTC)
-                         dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
+                except ValueError:
+                    # Si fromisoformat() échoue (par exemple, format non standard même après nettoyage),
+                    # essaie de parser avec dateutil.parser.isoparse (plus flexible)
+                    try:
+                         dt_obj = dateutil.parser.isoparse(cleaned_timestamp_str) # Utilise la chaîne nettoyée
+                    except Exception as e_parse:
+                         # Si les deux méthodes de parsing échouent, log l'erreur et utilise le format de secours
+                         print(f"Erreur parsing date avec fromisoformat et dateutil pour timestamp '{timestamp_str}' (après nettoyage: '{cleaned_timestamp_str}', ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
+                         date_fmt = f"Format date inconnu ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne originale pour debug
+                         dt_obj = None # S'assure que dt_obj est None si le parsing a échoué
 
-                    # Convertir l'objet date en heure de Paris pour l'affichage
-                    paris_tz = pytz.timezone('Europe/Paris')
-                    dt_paris = dt_obj.astimezone(paris_tz)
+                if dt_obj: # Si le parsing a réussi avec l'une des méthodes
+                    try:
+                        # S'assurer que l'objet datetime est conscient du fuseau horaire.
+                        # fromisoformat/isoparse devrait le faire si le Z ou l'offset est présent,
+                        # mais cette vérification ajoute de la robustesse.
+                        if dt_obj.tzinfo is None:
+                             # Si pas de timezone info, assume UTC (car notre fetcher vise UTC)
+                             dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
 
-                    # Formater la date pour l'affichage final
-                    date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
+                        # Convertir l'objet date en heure de Paris pour l'affichage
+                        paris_tz = pytz.timezone('Europe/Paris')
+                        dt_paris = dt_obj.astimezone(paris_tz)
+                        
+                        # Formater la date pour l'affichage final
+                        date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
 
-                except Exception as e_tz_format:
-                    # Log les erreurs pendant la conversion de fuseau horaire ou le formatage final
-                    print(f"Erreur conversion/formatage timezone pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
-                    date_fmt = f"Erreur conversion date ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne d'origine
+                    except Exception as e_tz_format:
+                        # Log les erreurs pendant la conversion de fuseau horaire ou le formatage final
+                        print(f"Erreur conversion/formatage timezone pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', après nettoyage: '{cleaned_timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
+                        date_fmt = f"Erreur conversion date ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne d'origine
 
 
-        # -------------------------------------------------------------
+            # -------------------------------------------------------------
 
             display_content = (content[:150] + '...') if len(content) > 150 else content
 
