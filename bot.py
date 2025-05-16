@@ -26,6 +26,10 @@ AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 
 print("DEBUG: Env variables loaded.")
 
+# --- MODIFICATION : Définir comme constante globale ---
+MAX_MESSAGES_FOR_SUMMARY_CONFIG = 100 
+# ----------------------------------------------------
+
 from openai import AsyncAzureOpenAI, APIError, APIConnectionError, RateLimitError
 
 azure_openai_client = None
@@ -75,10 +79,6 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
         print(traceback.format_exc())
 
 async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | None:
-    """
-    Interroge Azure OpenAI pour obtenir une requête SQL Cosmos DB basée sur la question de l'utilisateur.
-    Retourne la chaîne de la requête SQL ou None en cas d'échec.
-    """
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
         print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
         await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY-SQL-GEN")
@@ -86,10 +86,9 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
 
     paris_tz = pytz.timezone('Europe/Paris')
     # Utilisation de la date fournie pour la référence, sinon la date actuelle
-    try:
-        current_time_paris = datetime.datetime.strptime("2025-05-16 14:40:12", "%Y-%m-%d %H:%M:%S").replace(tzinfo=paris_tz)
-    except ValueError: # Fallback si la date fournie n'est pas valide
-        current_time_paris = datetime.datetime.now(paris_tz)
+    # Pour les tests, on peut fixer une date de référence ici. Pour la prod, datetime.datetime.now(paris_tz)
+    # current_time_paris = datetime.datetime.strptime("2025-05-16 14:40:12", "%Y-%m-%d %H:%M:%S").replace(tzinfo=paris_tz)
+    current_time_paris = datetime.datetime.now(paris_tz) # Utiliser l'heure actuelle en production
         
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
    
@@ -123,14 +122,18 @@ Instructions pour la génération de la requête :
 3.  Pour les recherches de texte dans `c.content`, `c.author_name`, utilise `CONTAINS(c.field, "terme", true)` pour des recherches insensibles à la casse.
 4.  Pour les dates (champ `c.timestamp_iso`) :
     * Utilise la date et l'heure de référence ({system_current_time_reference}) pour interpréter les références temporelles relatives. Convertis-les en filtres sur `c.timestamp_iso` au format UTC ISO 8601.
-    * "aujourd'hui", "hier", "cette semaine", "la semaine dernière", "les N derniers jours/heures": plages précises (`>=` et `<=`) ou `STARTSWITH("YYYY-MM-DD")`.
+    * "aujourd'hui": `STARTSWITH(c.timestamp_iso, "{current_time_paris.strftime('%Y-%m-%d')}")`
+    * "hier": `STARTSWITH(c.timestamp_iso, "{(current_time_paris - datetime.timedelta(days=1)).strftime('%Y-%m-%d')}")`
+    * "cette semaine" (Lundi à Dimanche, Lundi étant weekday 0): 
+        Le premier jour de cette semaine (Lundi) est `{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z`.
+        Le dernier jour de cette semaine (Dimanche) est `{(current_time_paris + datetime.timedelta(days=(6 - current_time_paris.weekday()))).strftime('%Y-%m-%d')}T23:59:59.999Z`.
+        Donc, la condition est `c.timestamp_iso >= "{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z" AND c.timestamp_iso <= "{(current_time_paris + datetime.timedelta(days=(6 - current_time_paris.weekday()))).strftime('%Y-%m-%d')}T23:59:59.999Z"`
+    * "la semaine dernière": Calcule les dates du Lundi au Dimanche de la semaine précédente.
     * "il y a X mois", "en XXXX", "l'année dernière", "le mois dernier": `STARTSWITH("YYYY-MM")` ou `STARTSWITH("YYYY")`.
 5.  Pour filtrer par auteur (nom d'utilisateur), utilise `CONTAINS(c.author_name, "...", true)`. Si l'utilisateur dit "moi", utilise "{requesting_user_name}".
 6.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
-7.  **Sélection des champs :** Lorsque tu sélectionnes des messages, même si la question ne demande qu'un détail spécifique, sélectionne TOUJOURS au minimum les champs `c.id`, `c.channel_id`, `c.guild_id`, `c.author_name`, `c.author_display_name`, `c.content`, et `c.timestamp_iso` pour permettre une analyse et un référencement corrects par la suite. Si la question demande explicitement "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
-8.  **Ordre de tri par défaut :** Sauf indication contraire (comme "premier message" ou "plus ancien"), trie par `ORDER BY c.timestamp_iso DESC` (plus récent en premier).
-    *   Si "premier message" ou "plus ancien" est demandé, utilise `ORDER BY c.timestamp_iso ASC`.
-    *   Si "dernier message" ou "plus récent" est demandé, utilise `ORDER BY c.timestamp_iso DESC`.
+7.  **Sélection des champs :** Sélectionne TOUJOURS au minimum `c.id`, `c.channel_id`, `c.guild_id`, `c.author_name`, `c.author_display_name`, `c.content`, et `c.timestamp_iso`. Si "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
+8.  **Ordre de tri :** Par défaut `ORDER BY c.timestamp_iso DESC`. Pour "premier message" ou "plus ancien", utilise `ASC`.
 9.  Pour "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
 10. Pour limiter le nombre de résultats ("le dernier message", "les 5 messages"), utilise `TOP N` après `SELECT`.
 
@@ -141,17 +144,10 @@ Exemples (date de référence {system_current_time_reference}) :
   IA: SELECT VALUE COUNT(1) FROM c WHERE STARTSWITH(c.timestamp_iso, "2025-01-01T")
 - Utilisateur: "le premier message contenant 'salut'"
   IA: SELECT TOP 1 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.content, "salut", true) ORDER BY c.timestamp_iso ASC
-- Utilisateur: "les 5 derniers messages de FlyXOwl"
-  IA: SELECT TOP 5 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) ORDER BY c.timestamp_iso DESC
-- Utilisateur: "Qui a dit 'bebzerie' pour la première fois ?"
-  IA: SELECT TOP 1 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.content, "bebzerie", true) ORDER BY c.timestamp_iso ASC
 - Utilisateur: "les 50 premiers messages"
   IA: SELECT TOP 50 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c ORDER BY c.timestamp_iso ASC
-- Utilisateur: "les 50 derniers messages"
-  IA: SELECT TOP 50 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c ORDER BY c.timestamp_iso DESC
 - Utilisateur: "messages de cette semaine"
-  IA: SELECT c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE c.timestamp_iso >= "{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z" AND c.timestamp_iso <= "{current_time_paris.strftime('%Y-%m-%d')}T23:59:59.999Z" ORDER BY c.timestamp_iso DESC
-
+  IA: SELECT c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE c.timestamp_iso >= "{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z" AND c.timestamp_iso <= "{(current_time_paris + datetime.timedelta(days=(6 - current_time_paris.weekday()))).strftime('%Y-%m-%d')}T23:59:59.999Z" ORDER BY c.timestamp_iso DESC
 
 Question de l'utilisateur :
 """
@@ -163,7 +159,7 @@ Question de l'utilisateur :
                 {"role": "user", "content": user_query}
             ],
             temperature=0.2,
-            max_tokens=300,
+            max_tokens=350, # Un peu plus de marge pour les dates calculées dans les exemples
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
@@ -202,11 +198,11 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     if not messages_list:
         return "Aucun message à résumer."
 
-    ### MODIFICATION ### Valeur plus sûre pour MAX_MESSAGES_FOR_SUMMARY
-    MAX_MESSAGES_FOR_SUMMARY = 100
+    # Utiliser la constante globale définie en haut du script
+    messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY_CONFIG]
+    
     formatted_messages = ""
     paris_tz = pytz.timezone('Europe/Paris')
-    messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
 
     first_message_id_for_link = None
     first_channel_id_for_link = None
@@ -250,7 +246,6 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
 
     await send_bot_log_message(f"DEBUG Lien: guild_id={first_guild_id_for_link}, chan_id={first_channel_id_for_link}, msg_id={first_message_id_for_link}", source="AI-SUMMARY-DEBUG")
 
-    ### MODIFICATION ### Prompt système renforcé pour la synthèse
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
 Tu recevras une liste d'environ {len(messages_to_summarize)} messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
@@ -294,8 +289,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            ### MODIFICATION ### Température plus basse et max_tokens ajusté
-            temperature=0.3,
+            temperature=0.3, 
             max_tokens=1500, 
             top_p=0.95,
             frequency_penalty=0,
@@ -318,6 +312,14 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except RateLimitError as e:
         error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}."
+        # Spécifier le type d'erreur dans le message utilisateur peut être utile
+        if "context_length_exceeded" in str(e):
+             # Ce cas devrait être moins fréquent maintenant avec MAX_MESSAGES_FOR_SUMMARY_CONFIG plus bas
+             # Mais on le garde au cas où.
+            await send_bot_log_message(f"Erreur de limite de taux (Synthèse) - Dépassement de la longueur du contexte: {e}", source="AI-SUMMARY")
+            # On pourrait vouloir retourner un message spécifique ou None pour que ask_command le gère
+            # Pour l'instant, on logue et on retourne None, ce qui mènera à "Désolé, je n'ai pas réussi à générer de résumé..."
+            return None 
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except Exception as e:
         error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (Synthèse) : {e}\n{traceback.format_exc()}"
@@ -325,6 +327,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
 
 print("DEBUG: AI functions defined.")
 
+# ... (le reste du code reste identique jusqu'à ask_command) ...
 print("DEBUG: Initializing Discord Intents and Bot...")
 intents = discord.Intents.default()
 intents.messages = True
@@ -555,11 +558,11 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source); return
 
         await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") 
-        ai_summary = await get_ai_summary(items) # items contient tous les messages trouvés
+        ai_summary = await get_ai_summary(items) 
 
         if ai_summary:
             embed = discord.Embed(
-                title=f"Résumé des messages trouvés ({len(items)} messages)", # Affiche le nombre total de messages trouvés
+                title=f"Résumé des messages trouvés ({len(items)} messages)",
                 description=ai_summary, 
                 color=discord.Color.blue(), 
                 timestamp=discord.utils.utcnow()
@@ -572,10 +575,15 @@ async def ask_command(ctx, *, question: str):
             except Exception as e_embed:
                  await ctx.send(f"**Résumé ({len(items)} msgs):**\n{ai_summary}\n*(Erreur Embed: {e_embed})*")
                  print(f"Erreur Embed: {e_embed}\n{traceback.format_exc()}")
-            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages (résumé basé sur les {min(len(items), MAX_MESSAGES_FOR_SUMMARY)} premiers). Résultat envoyé.", source=log_source)
+            # --- MODIFICATION : Utiliser la constante globale pour le log ---
+            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages (résumé basé sur les {min(len(items), MAX_MESSAGES_FOR_SUMMARY_CONFIG)} premiers). Résultat envoyé.", source=log_source)
         else:
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
-            await send_bot_log_message(f"Synthèse échouée pour {len(items)} messages.", source=log_source)
+            # Le log d'échec de la synthèse est déjà fait dans get_ai_summary si une exception API survient
+            # Ajouter un log ici si get_ai_summary retourne None sans exception API (ex: liste de messages vide après filtrage)
+            if not ai_summary : # S'assurer que le log n'est pas redondant si get_ai_summary a déjà loggué une erreur API
+                await send_bot_log_message(f"Synthèse retournée comme None pour {len(items)} messages (raison non-API, ex: messages_to_summarize vide).", source=log_source)
+
     except exceptions.CosmosHttpResponseError as e:
         error_msg_user = "Une erreur s'est produite lors de la recherche dans la base de données."
         if "Query exceeded memory limit" in str(e) or "Query exceeded maximum time limit" in str(e):
