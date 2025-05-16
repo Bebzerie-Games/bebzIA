@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import traceback # Pour les logs d'erreur détaillés
 import pytz
-import dateutil.parser
+import dateutil.parser # Importé pour un parsing de date plus robuste
 
 print("DEBUG: Script starting...") # AJOUT DEBUG
 
@@ -65,7 +65,7 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
     log_prefix = f"[{source.upper()}]"
 
     if 'bot' not in globals() or not globals().get('bot').is_ready() or not LOG_CHANNEL_ID:
-        print(f"[{timestamp_stdout_utc_display}] {log_prefix} [LOG STDOUT - CANAL/BOT INDISPONIBLE] {message_content}")
+        print(f"[{timestamp_stdout_utc_display}] {log_prefix} [LOG STDOUT - CANAL/BOT INDISPONSIBLE] {message_content}")
         return
 
     try:
@@ -85,7 +85,7 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
         print(traceback.format_exc())
 
 
-# --- Fonction d'analyse IA (Nouvelle API v1.x.x) ---
+# --- Fonction d'analyse IA pour la génération SQL ---
 async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | None:
     """
     Interroge Azure OpenAI pour obtenir une requête SQL Cosmos DB basée sur la question de l'utilisateur.
@@ -93,9 +93,10 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
     """
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client: # Vérification du client aussi
         print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
-        await send_bot_log_message("Tentative d'appel à l'IA alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY")
+        await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY")
         return None
 
+    # Construction du system_prompt pour la génération SQL (comme précédemment)
     paris_tz = pytz.timezone('Europe/Paris')
     current_time_paris = datetime.datetime.now(paris_tz)
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -162,7 +163,7 @@ Question de l'utilisateur :
 """
 
     try:
-        print(f"Tentative d'appel à Azure OpenAI avec la question : {user_query}")
+        # Appel à l'API Azure OpenAI pour obtenir la requête SQL
         response = await azure_openai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[
@@ -179,42 +180,151 @@ Question de l'utilisateur :
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             generated_query = response.choices[0].message.content.strip()
-            print(f"Requête SQL générée par l'IA : {generated_query}")
+            # print(f"Requête SQL générée par l'IA : {generated_query}") # Déjà loggué dans send_bot_log_message
 
             if "NO_QUERY_POSSIBLE" in generated_query:
-                await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'", source="AI-QUERY")
+                await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'", source="AI-QUERY-SQL-GEN")
                 return "NO_QUERY_POSSIBLE"
 
             if not generated_query.upper().startswith("SELECT"):
-                await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'", source="AI-QUERY")
+                await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'", source="AI-QUERY-SQL-GEN")
                 return "INVALID_QUERY_FORMAT"
 
             return generated_query
         else:
-            await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'.", source="AI-QUERY")
+            await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'.", source="AI-QUERY-SQL-GEN")
             print(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI. Réponse complète : {response}")
             return None
 
     except APIError as e:
-        error_message = f"Erreur API Azure OpenAI : {e}"
+        error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}"
         print(error_message)
-        await send_bot_log_message(error_message, source="AI-QUERY")
+        await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN")
         return None
     except APIConnectionError as e:
-        error_message = f"Erreur de connexion Azure OpenAI : {e}"
+        error_message = f"Erreur de connexion Azure OpenAI (SQL Gen) : {e}"
         print(error_message)
-        await send_bot_log_message(error_message, source="AI-QUERY")
+        await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN")
         return None
     except RateLimitError as e:
-        error_message = f"Erreur de limite de taux Azure OpenAI : {e}. Veuillez vérifier votre quota et votre utilisation."
+        error_message = f"Erreur de limite de taux Azure OpenAI (SQL Gen) : {e}. Veuillez vérifier votre quota et votre utilisation."
         print(error_message)
-        await send_bot_log_message(error_message, source="AI-QUERY")
+        await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN")
         return None
     except Exception as e:
-        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI : {e}\n{traceback.format_exc()}"
+        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (SQL Gen) : {e}\n{traceback.format_exc()}"
         print(error_message)
-        await send_bot_log_message(error_message, source="AI-QUERY")
+        await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN")
         return None
+
+# --- Fonction d'analyse IA pour la synthèse des messages ---
+async def get_ai_summary(messages_list: list[dict]) -> str | None:
+    """
+    Interroge Azure OpenAI pour obtenir un résumé d'une liste de messages.
+    Retourne le texte du résumé ou None en cas d'échec.
+    """
+    if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
+        await send_bot_log_message("Tentative d'appel à l'IA (Synthèse) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-SUMMARY")
+        return None
+    
+    if not messages_list:
+        return "Aucun message à résumer."
+
+    # Formater les messages pour les envoyer à l'IA
+    # On limite le nombre de messages pour éviter de dépasser la taille du prompt de l'IA
+    MAX_MESSAGES_FOR_SUMMARY = 50 
+    formatted_messages = "" # Initialise la chaîne qui contiendra les messages formatés
+    paris_tz = pytz.timezone('Europe/Paris')
+
+    # Limiter aux N messages les plus récents (premiers de la liste triée par DESC)
+    messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
+
+    # Formater chaque message - ASSURE-TOI QUE LES LIGNES CI-DESSOUS SONT BIEN INDENTÉES
+    for item in messages_to_summarize:
+        # Les lignes à l'intérieur de cette boucle FOR doivent être indentées d'un niveau supplémentaire
+        author = item.get("author_name", "Auteur inconnu")
+        timestamp_str = item.get("timestamp_iso")
+        content = item.get("content", "")
+
+        date_fmt = "Date inconnue"
+        if timestamp_str:
+            try:
+                # Utiliser dateutil.parser.isoparse pour plus de flexibilité
+                dt_obj = dateutil.parser.isoparse(timestamp_str)
+
+                if dt_obj.tzinfo is None:
+                    dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
+
+                dt_paris = dt_obj.astimezone(paris_tz)
+                date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
+            except Exception:
+                # En cas d'échec de parsing, utiliser une date de secours et logguer l'erreur
+                 pass # Logguer si nécessaire dans les logs Heroku, mais ne pas bloquer le résumé
+
+
+        # Cette ligne était probablement la cause de l'erreur "Expected indented block" car pas assez indentée
+        formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
+
+    # Le prompt pour l'IA pour la synthèse (Le reste de la fonction, pas besoin de le modifier si ce n'est pas le problème d'indentation)
+    system_prompt = """
+Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
+Tu recevras une liste de messages Discord dans l'ordre chronologique (du plus récent au plus ancien, ou inversement, selon comment ils sont fournis).
+Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion.
+Mets en évidence les sujets principaux, les points clés et, si pertinent, les opinions ou informations importantes partagées.
+Le résumé doit être un texte fluide, pas une liste de points.
+Ne cite pas les messages textuellement, sauf si une citation est absolument nécessaire pour le contexte.
+Le résumé doit être en français.
+Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 200 mots).
+"""
+
+    user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n---\n\nRésumé de la discussion :"
+
+    try:
+        # Appel à l'API Azure OpenAI pour obtenir le résumé
+        response = await azure_openai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7, # Une température un peu plus élevée pour un résumé plus fluide
+            max_tokens=300, # Plus de tokens pour le résumé que pour la requête SQL
+            top_p=0.95,
+            frequency_penalty=0,
+            presence_penalty=0,
+            stop=None
+        )
+
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            summary = response.choices[0].message.content.strip()
+            await send_bot_log_message(f"Résumé IA généré pour {len(messages_to_summarize)} messages: {summary}", source="AI-SUMMARY")
+            return summary
+        else:
+            await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse. Réponse complète : {response}", source="AI-SUMMARY")
+            print(f"Aucune réponse IA pour synthèse. Réponse complète : {response}")
+            return None
+
+    except APIError as e:
+        error_message = f"Erreur API Azure OpenAI (Synthèse) : {e}"
+        print(error_message)
+        await send_bot_log_message(error_message, source="AI-SUMMARY")
+        return None
+    except APIConnectionError as e:
+        error_message = f"Erreur de connexion Azure OpenAI (Synthèse) : {e}"
+        print(error_message)
+        await send_bot_log_message(error_message, source="AI-SUMMARY")
+        return None
+    except RateLimitError as e:
+        error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}. Veuillez vérifier votre quota et votre utilisation."
+        print(error_message)
+        await send_bot_log_message(error_message, source="AI-SUMMARY")
+        return None
+    except Exception as e:
+        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (Synthèse) : {e}\n{traceback.format_exc()}"
+        print(error_message)
+        await send_bot_log_message(error_message, source="AI-SUMMARY")
+        return None
+
 
 print("DEBUG: AI functions defined.") # AJOUT DEBUG
 
@@ -271,7 +381,8 @@ def format_message_to_json(message: discord.Message):
         "author_id": str(message.author.id),
         "author_name": message.author.name,
         "author_discriminator": message.author.discriminator,
-        "author_nickname": message.author.nick if hasattr(message.author, 'nick') else None,
+        # Utilise message.author.display_name pour le nom d'affichage (pseudo ou nom d'utilisateur)
+        "author_display_name": message.author.display_name, 
         "author_bot": message.author.bot,
         "content": message.content,
         "timestamp_iso": message.created_at.isoformat() + "Z",
@@ -283,6 +394,7 @@ def format_message_to_json(message: discord.Message):
         "reactions_count": sum(reaction.count for reaction in message.reactions),
         "edited_timestamp_iso": message.edited_at.isoformat() + "Z" if message.edited_at else None,
     }
+
 
 async def main_message_fetch_logic():
     log_source = "AUTO-FETCH"
@@ -460,7 +572,7 @@ async def ask_command(ctx, *, question: str):
 
     # --- Nouvelle vérification de l'utilisateur ---
     if ALLOWED_USER_ID is not None and ctx.author.id != ALLOWED_USER_ID:
-        print(f"Tentative d'utiliser !ask par utilisateur non autorisé: {ctx.author.name} (ID: {ctx.author.id})")
+        # print(f"Tentative d'utiliser !ask par utilisateur non autorisé: {ctx.author.name} (ID: {ctx.author.id})") # Moins de logs direct sur Heroku pour ça
         await ctx.send("Désolé, cette commande est actuellement restreinte.")
         return
     # --- Fin de la vérification ---
@@ -480,10 +592,9 @@ async def ask_command(ctx, *, question: str):
         return
     # --- Fin des vérifications ---
 
-    # --- Appeler get_ai_analysis UNE SEULE fois et PASSER LE NOM DE L'UTILISATEUR ---
-    generated_sql_query = await get_ai_analysis(question, ctx.author.name) # <-- Correct maintenant
-
-    # --- Gérer le résultat de l'appel à l'IA ---
+    # --- Étape 1 : Générer la requête SQL avec l'IA ---
+    generated_sql_query = await get_ai_analysis(question, ctx.author.name) 
+    
     if not generated_sql_query:
         await ctx.send("Je n'ai pas réussi à interpréter votre question (erreur interne/communication IA).")
         # get_ai_analysis a déjà loggué l'erreur spécifique
@@ -497,11 +608,15 @@ async def ask_command(ctx, *, question: str):
         await ctx.send("L'IA a retourné une réponse dans un format inattendu.")
         return # Log déjà fait par get_ai_analysis
 
-    # --- Le reste de ta fonction (affichage, exécution de la requête Cosmos DB, etc.) ---
+    # Log la requête générée (utile pour le debug, n'est pas envoyé à l'utilisateur)
     await send_bot_log_message(f"Cmd !ask par {ctx.author.name} pour '{question}'. Requête IA : {generated_sql_query}", source=log_source)
-    if len(generated_sql_query) < 1900 : # Pour éviter un message de debug trop long
-        await ctx.send(f"Requête générée (débogage) : ```sql\n{generated_sql_query}\n```")
+    
+    # --- Commente ou supprime les messages de debug envoyés à l'utilisateur ---
+    # if len(generated_sql_query) < 1900 : # Pour éviter un message de debug trop long
+    #     await ctx.send(f"Requête générée (débogage) : ```sql\n{generated_sql_query}\n```")
+    # --------------------------------------------------------------------
 
+    # --- Étape 2 : Exécuter la requête sur Cosmos DB ---
     try:
         query_to_execute = generated_sql_query
         items = list(container_client.query_items(
@@ -509,125 +624,44 @@ async def ask_command(ctx, *, question: str):
             enable_cross_partition_query=True
         ))
 
-        # ... (Reste de la logique d'affichage des résultats) ...
-
+        # --- Étape 3 : Gérer les résultats ---
         if not items:
             await ctx.send("J'ai exécuté la recherche, mais aucun message ne correspond à votre demande.")
             await send_bot_log_message(f"Aucun résultat Cosmos DB pour : {query_to_execute}", source=log_source)
             return
 
+        # Si la requête est un COUNT, afficher le résultat directement
         if query_to_execute.upper().startswith("SELECT VALUE COUNT(1)"):
             count = items[0] if items else 0
             await ctx.send(f"J'ai trouvé {count} message(s) correspondant à votre demande.")
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source)
             return
 
-        # --- Début de la boucle d'affichage des résultats (Déjà modifiée) ---
-        response_parts = [f"Voici les messages que j'ai trouvés (jusqu'à {min(len(items), 5)} affichés) :\n"] # Ajuster le message si moins de 5 résultats
-        max_messages_to_display = 5
-        messages_displayed_count = 0
+        # Si la requête a retourné des messages (pas un COUNT), générer un résumé
+        await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") # Informe l'utilisateur du nombre de messages trouvés
 
-        for item in items[:max_messages_to_display]:
-            # Tenter de lire le format ACTUEL (ajouté par format_message_to_json)
-            author = item.get("author_name")
-            timestamp_str = item.get("timestamp_iso") # Utilise un nom temporel pour éviter conflit
+        # --- Étape 4 : Générer le résumé avec l'IA ---
+        ai_summary = await get_ai_summary(items)
 
-            # Si le format actuel n'est pas trouvé, tenter de lire l'ANCIEN format
-            if author is None:
-                author = item.get("author", {}).get("name", "Auteur inconnu") # Va chercher dans l'objet 'author'
+        # --- Étape 5 : Afficher le résumé ou les messages en cas d'échec de synthèse ---
+        if ai_summary:
+            # Affiche le résumé retourné par l'IA
+            await ctx.send(f"**Résumé des messages trouvés ({len(items)} messages) :**\n{ai_summary}")
+            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages.", source=log_source)
+        else:
+            # Si la synthèse a échoué, on peut soit l'indiquer, soit afficher les premiers messages en secours
+            await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
+            # Optionnel: Afficher les premiers messages en secours si la synthèse échoue
+            # print("DEBUG: Affichage des premiers messages en secours suite à l'échec de synthèse.")
+            # response_parts = [f"Voici les {min(len(items), 5)} premiers messages trouvés (synthèse échouée) :\n"]
+            # max_messages_to_display = 5
+            # messages_displayed_count = 0
+            # # Copier/coller la boucle d'affichage précédente si tu veux ce fallback
+            # # ... (code de la boucle d'affichage des 5 premiers messages) ...
+            # # Ensuite, envoyer les parties du message
+            # # ... (code d'envoi des current_message) ...
+            await send_bot_log_message(f"Synthèse échouée pour {len(items)} messages.", source=log_source)
 
-            if timestamp_str is None:
-                timestamp_str = item.get("timestamp", "Date inconnue") # Cherche l'ancienne clé 'timestamp'
-
-            content = item.get("content", "*Contenu vide*")
-
-
-# --- Formatage de la date ---
-            date_fmt = "Date invalide ou manquante" # Valeur par défaut
-            timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
-
-            # Fallback à l'ancienne clé si la nouvelle n'est pas trouvée
-            if timestamp_str is None:
-                timestamp_str = item.get("timestamp") 
-
-            dt_obj = None # Initialise l'objet date à None
-
-            if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
-                
-                # --- Nettoyage spécifique pour formats problématiques ---
-                # Nettoie la chaîne pour gérer le format non standard '+00:00Z'
-                cleaned_timestamp_str = timestamp_str.replace('+00:00Z', 'Z')
-                # Si d'autres formats problématiques apparaissent, ajoute des .replace() ici
-                # Exemple: cleaned_timestamp_str = cleaned_timestamp_str.replace('+00:...', '+00:00') 
-                
-                # print(f"DEBUG: Timestamp original: '{timestamp_str}'") # Optionnel: debug
-                # print(f"DEBUG: Timestamp nettoyé: '{cleaned_timestamp_str}'") # Optionnel: debug
-
-                # --- Tentative de parsing ---
-                try:
-                    # Tente de parser la date en utilisant fromisoformat() (standard et rapide)
-                    # Utilise la chaîne nettoyée
-                    dt_obj = datetime.datetime.fromisoformat(cleaned_timestamp_str)
-
-                except ValueError:
-                    # Si fromisoformat() échoue (par exemple, format non standard même après nettoyage),
-                    # essaie de parser avec dateutil.parser.isoparse (plus flexible)
-                    try:
-                         dt_obj = dateutil.parser.isoparse(cleaned_timestamp_str) # Utilise la chaîne nettoyée
-                    except Exception as e_parse:
-                         # Si les deux méthodes de parsing échouent, log l'erreur et utilise le format de secours
-                         print(f"Erreur parsing date avec fromisoformat et dateutil pour timestamp '{timestamp_str}' (après nettoyage: '{cleaned_timestamp_str}', ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
-                         date_fmt = f"Format date inconnu ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne originale pour debug
-                         dt_obj = None # S'assure que dt_obj est None si le parsing a échoué
-
-                if dt_obj: # Si le parsing a réussi avec l'une des méthodes
-                    try:
-                        # S'assurer que l'objet datetime est conscient du fuseau horaire.
-                        # fromisoformat/isoparse devrait le faire si le Z ou l'offset est présent,
-                        # mais cette vérification ajoute de la robustesse.
-                        if dt_obj.tzinfo is None:
-                             # Si pas de timezone info, assume UTC (car notre fetcher vise UTC)
-                             dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
-
-                        # Convertir l'objet date en heure de Paris pour l'affichage
-                        paris_tz = pytz.timezone('Europe/Paris')
-                        dt_paris = dt_obj.astimezone(paris_tz)
-                        
-                        # Formater la date pour l'affichage final
-                        date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
-
-                    except Exception as e_tz_format:
-                        # Log les erreurs pendant la conversion de fuseau horaire ou le formatage final
-                        print(f"Erreur conversion/formatage timezone pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', après nettoyage: '{cleaned_timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
-                        date_fmt = f"Erreur conversion date ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne d'origine
-
-
-            # -------------------------------------------------------------
-
-            display_content = (content[:150] + '...') if len(content) > 150 else content
-
-            # --- Ajout à la réponse ---
-            # Ajoute l'ID du message pour faciliter le debug si besoin
-            response_parts.append(f"\n**De {author} (le {date_fmt}):** (ID: {item.get('id', 'N/A')})\n```\n{display_content}\n```\n---")
-            messages_displayed_count += 1
-        # --- Fin de la boucle d'affichage ---
-
-
-        if len(items) > max_messages_to_display:
-            response_parts.append(f"\n*Et {len(items) - max_messages_to_display} autre(s) message(s) trouvé(s).*")
-
-        current_message = ""
-        for part in response_parts:
-            if len(current_message) + len(part) > 1950: # Marge pour les backticks et autres formatages
-                await ctx.send(current_message)
-                current_message = part
-            else:
-                current_message += part
-        
-        if current_message: # Envoyer le reste
-            await ctx.send(current_message)
-        
-        await send_bot_log_message(f"{len(items)} résultats pour '{query_to_execute}'. {messages_displayed_count} affichés.", source=log_source)
 
     except exceptions.CosmosHttpResponseError as e:
         error_msg_user = "Une erreur s'est produite lors de la recherche dans la base de données."
@@ -638,21 +672,66 @@ async def ask_command(ctx, *, question: str):
         await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\n{traceback.format_exc()}", source=log_source)
         print(f"Erreur Cosmos DB: {e}")
     except Exception as e:
-        await ctx.send("Une erreur inattendue s'est produite.")
-        await send_bot_log_message(f"Erreur inattendue dans ask_command pour '{generated_sql_query}': {e}\n{traceback.format_exc()}", source=log_source)
+        await ctx.send("Une erreur inattendue s'est produite lors de l'exécution de la requête ou de la synthèse.")
+        await send_bot_log_message(f"Erreur inattendue dans ask_command (exécution/synthèse) pour '{generated_sql_query}': {e}\n{traceback.format_exc()}", source=log_source)
         print(f"Erreur inattendue: {e}")
 
+
+print("DEBUG: AI functions defined.") # AJOUT DEBUG
+
+# --- Configuration des Intents et du Bot ---
+print("DEBUG: Initializing Discord Intents and Bot...") # AJOUT DEBUG
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.guilds = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+print("DEBUG: Discord Bot object created.") # AJOUT DEBUG
+
+# --- Conversion des IDs de canaux ---
+print("DEBUG: Converting IDs...") # AJOUT DEBUG
+try:
+    if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
+    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
+    # --- Conversion du nouvel ID utilisateur ---
+    if ALLOWED_USER_ID_STR: ALLOWED_USER_ID = int(ALLOWED_USER_ID_STR)
+    # ---------------------------------------
+except ValueError:
+    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide.")
+print("DEBUG: ID conversion complete.") # AJOUT DEBUG
+
+# --- Initialisation du client Cosmos DB ---
+print("DEBUG: Initializing Cosmos DB...") # AJOUT DEBUG
+cosmos_client_instance_global = None
+container_client = None
+if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
+    try:
+        cosmos_client_instance_global = CosmosClient(COSMOS_DB_ENDPOINT, credential=COSMOS_DB_KEY)
+        database_client = cosmos_client_instance_global.create_database_if_not_exists(id=DATABASE_NAME)
+        partition_key_path = PartitionKey(path="/id")
+        container_client = database_client.create_container_if_not_exists(
+            id=CONTAINER_NAME,
+            partition_key=partition_key_path,
+            offer_throughput=400
+        )
+        print("Connecté à Cosmos DB avec succès.")
+    except Exception as e:
+        print(f"ERREUR CRITIQUE lors de l'initialisation de Cosmos DB: {e}\n{traceback.format_exc()}")
+        container_client = None
+else:
+    print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages sera désactivée.")
+print("DEBUG: Cosmos DB init complete.") # AJOUT DEBUG
 
 # --- Démarrage du Bot ---
 print("DEBUG: Reaching main execution block.") # AJOUT DEBUG
 if __name__ == "__main__":
     print("DEBUG: Inside __main__ block.") # AJOUT DEBUG
     if DISCORD_BOT_TOKEN:
-        print("DEBUG: Tentative de démarrer le bot...") # Ajoute ce log
+        print("DEBUG: Tentative de démarrer le bot...")
         try:
             bot.run(DISCORD_BOT_TOKEN)
-            print("DEBUG: bot.run() terminé. (Ce message ne devrait PAS s'afficher pour un bot en marche continue)") # Ajoute ce log
+            print("DEBUG: bot.run() terminé. (Ce message ne devrait PAS s'afficher pour un bot en marche continue)")
         except Exception as e:
-            print(f"ERREUR: Exception lors de bot.run(): {e}\n{traceback.format_exc()}") # Log les exceptions ici aussi
+            print(f"ERREUR: Exception lors de bot.run(): {e}\n{traceback.format_exc()}")
     else:
         print("ERREUR: DISCORD_BOT_TOKEN non trouvé. Le bot ne peut pas démarrer.")
