@@ -370,13 +370,6 @@ async def main_message_fetch_logic():
                         f"- Messages traités/mis à jour : {fetched_in_pass}")
     await send_bot_log_message(summary_message, source=log_source)
 
-    if __name__ == "__main__":
-    if DISCORD_BOT_TOKEN:
-        print("DEBUG: Tentative de démarrer le bot...") # Ajoute ce log
-        try:
-            bot.run(DISCORD_BOT_TOKEN)
-            print("DEBUG: bot.run() terminé. (Ce message ne devrait PAS s'afficher pour un bot en marche continue)") # Ajoute ce log
-        except Exception as e:
-            print(f"ERREUR: Exception lors de bot.run(): {e}\n{traceback.format_exc()}") # Log les exceptions ici aussi
-    else:
-        print("ERREUR: DISCORD_BOT_TOKEN non trouvé. Le bot ne peut pas démarrer.")
+    # NOTE: Le bloc except Exception as e: à la fin de la fonction principale
+    # gère les erreurs *pendant* la boucle history, pas avant que channel_to_fetch soit défini.
+    # Les exceptions spécifiques discord.NotFound et discord.Forbidden sont maintenant gérées plus tôt.
