@@ -234,105 +234,102 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     if not messages_list:
         return "Aucun message à résumer."
 
-    # Formater les messages pour les envoyer à l'IA
-    # On limite le nombre de messages pour éviter de dépasser la taille du prompt de l'IA
-    MAX_MESSAGES_FOR_SUMMARY = 150
-    formatted_messages = "" # Initialise la chaîne qui contiendra les messages formatés
+    MAX_MESSAGES_FOR_SUMMARY = 50 
+    formatted_messages = ""
     paris_tz = pytz.timezone('Europe/Paris')
-
-    # Limiter aux N messages les plus récents (premiers de la liste triée par DESC par défaut)
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
 
-    # Formater chaque message - ASSURE-TOI QUE LES LIGNES CI-DESSOUS SONT BIEN INDENTÉES
-    for item in messages_to_summarize:
-        # Les lignes à l'intérieur de cette boucle FOR doivent être indentées d'un niveau supplémentaire
+    # Garder en mémoire les IDs du premier message pour le lien
+    first_message_id_for_link = None
+    first_channel_id_for_link = None
+
+    for i, item in enumerate(messages_to_summarize):
         author = item.get("author_name", "Auteur inconnu")
-        # Utilise author_display_name pour le résumé si disponible, sinon author_name
         if item.get("author_display_name"):
              author = item.get("author_display_name")
 
         timestamp_str = item.get("timestamp_iso")
         content = item.get("content", "")
+        
+        message_id = item.get("id")
+        channel_id = item.get("channel_id")
 
-        date_fmt = "Date inconnue" # Default fallback
-        dt_obj = None # Initialize dt_obj
+        # Stocker les IDs du premier message
+        if i == 0 and message_id and channel_id:
+            first_message_id_for_link = message_id
+            first_channel_id_for_link = channel_id
 
+        date_fmt = "Date inconnue"
         if timestamp_str:
-             try:
-                 # Try fromisoformat first
-                 dt_obj = datetime.datetime.fromisoformat(timestamp_str)
-             except ValueError:
-                 # Fallback to dateutil if fromisoformat fails
-                 try:
-                     dt_obj = dateutil.parser.isoparse(timestamp_str)
-                 except Exception as e_parse:
-                      # Log parsing error, dt_obj remains None
-                      print(f"Erreur parsing date (pour résumé) avec fromisoformat/dateutil pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
+            dt_obj = None
+            try:
+                dt_obj = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    dt_obj = dateutil.parser.isoparse(timestamp_str)
+                except Exception:
+                    pass 
+            if dt_obj:
+                try:
+                    if dt_obj.tzinfo is None: 
+                        dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
+                    dt_paris = dt_obj.astimezone(paris_tz)
+                    date_fmt = dt_paris.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    date_fmt = timestamp_str 
+            else:
+                date_fmt = "Date inconnue" 
+        else:
+            date_fmt = "Date inconnue"
 
-
-             if dt_obj: # If parsing was successful
-                 try:
-                     # Ensure timezone-aware, assume UTC if naive
-                     if dt_obj.tzinfo is None:
-                         dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
-
-                     # Convert to Paris time
-                     dt_paris = dt_obj.astimezone(paris_tz)
-                     # Format date for AI input (ISO format is good for consistency)
-                     date_fmt = dt_paris.strftime("%Y-%m-%d %H:%M") # Format plus IA-friendly
-
-                 except Exception as e_tz_format:
-                     # Log errors during timezone conversion/formatting
-                      print(f"Erreur conversion/formatage timezone (pour résumé) pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
-                     # date_fmt remains "Date inconnue"
-
-
-        # Format each message for the AI prompt
-        # Inclure la date formatée pour aider l'IA à situer chronologiquement
+        # On n'a plus besoin de mettre les IDs dans formatted_messages si on les passe autrement au prompt
+        # formatted_messages += f"Message (ID: {message_id}, ChannelID: {channel_id})\n" 
         formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
 
-
-    # Le prompt pour l'IA pour la synthèse
-    system_prompt = """
+    # Nouveau system_prompt pour la synthèse
+    system_prompt = f"""
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
 Tu recevras une liste de messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
 Chaque message est séparé par une ligne "---".
 Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent.
 Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées.
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
-Voici un résumé de notre situation : 
- - Nous sommes un groupe d'amis nommé " La bebzerie " qui échangent sur Discord depuis 2022
-Pour les pseudos des utilisateurs donc "author_name" ou "author_display_name", les noms réels des personnes sont : 
-Lamerdeoffline ou Lamerde: Luka
-hezek112 ou hezekiel : Enzo
-FlyXOwl ou Fly: Théo
-airzya ou azyria : Vincent
-wkda_ledauphin ou ledauphin : Nathan
-viv1dvivi ou vivi ou vivihihihi : victoire mais appelle la vivi
-will.connect ou will : Justin
-bastos0234 ou bastos : Bastien
-ttv_yunix ou yunix : Liam
-.fantaman ou fantaman : Khelyan
-    - Tu peux les tutoyer dans tes réponses.
-    - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
-    - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
-    - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
-Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du premier message (si il y'en a plusieurs sinon un seul) a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (remplace "channel_id" par l'ID du canal et "id" par l'ID du message).
+
+Contexte du groupe d'amis "La bebzerie" (échanges depuis 2022) et correspondances pseudos/prénoms :
+Lamerdeoffline/Lamerde: Luka
+hezek112/hezekiel: Enzo
+FlyXOwl/Fly: Théo
+airzya/azyria: Vincent
+wkda_ledauphin/ledauphin: Nathan
+viv1dvivi/vivi/vivihihihi: Victoire (appelle-la Vivi)
+will.connect/will: Justin
+bastos0234/bastos: Bastien
+ttv_yunix/yunix: Liam
+.fantaman/fantaman: Khelyan
+
+Tu peux tutoyer et utiliser prénoms ou pseudos.
+
+À la fin de ton résumé, SI ET SEULEMENT SI un ID de message et un ID de canal pour le premier message pertinent t'ont été fournis ci-dessous, inclus un lien vers ce message.
+L'ID du premier message pertinent est : {first_message_id_for_link if first_message_id_for_link else 'Non fourni'}
+L'ID du canal du premier message pertinent est : {first_channel_id_for_link if first_channel_id_for_link else 'Non fourni'}
+Si ces IDs sont fournis et valides (pas 'Non fourni'), construis le lien comme suit : https://discord.com/channels/{first_channel_id_for_link}/{first_message_id_for_link}
+N'invente pas de lien si les IDs ne sont pas explicitement disponibles.
+Ne mentionne pas les IDs dans le résumé lui-même, seulement le lien formaté à la fin s'il est applicable.
+
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 300 mots).
 """
 
     user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n\nRésumé de la discussion :"
 
     try:
-        # Appel à l'API Azure OpenAI pour obtenir le résumé
         response = await azure_openai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            temperature=0.7, # Une température un peu plus élevée pour un résumé plus fluide
-            max_tokens=400, # Plus de tokens pour le résumé
+            temperature=0.7,
+            max_tokens=400,
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
@@ -341,14 +338,16 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             summary = response.choices[0].message.content.strip()
+            # L'IA devrait maintenant inclure le lien correctement formaté si les IDs étaient valides
             await send_bot_log_message(f"Résumé IA généré pour {len(messages_to_summarize)} messages: {summary}", source="AI-SUMMARY")
             return summary
         else:
-            await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse. Réponse complète : {response}", source="AI-SUMMARY")
-            print(f"Aucune réponse IA pour synthèse. Réponse complète : {response}")
+            # ... (gestion d'erreur existante) ...
+            await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse.", source="AI-SUMMARY") # Ajout du log
+            print(f"Aucune réponse IA pour synthèse. Réponse complète : {response}") # Ajout du print
             return None
-
-    except APIError as e:
+    # ... (blocs except existants) ...
+    except APIError as e: # S'assurer que les logs sont là pour toutes les exceptions
         error_message = f"Erreur API Azure OpenAI (Synthèse) : {e}"
         print(error_message)
         await send_bot_log_message(error_message, source="AI-SUMMARY")
