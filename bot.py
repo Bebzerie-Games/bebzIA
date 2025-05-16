@@ -381,28 +381,43 @@ except ValueError:
 print("DEBUG: ID conversion complete.") # AJOUT DEBUG
 
 # --- Initialisation du client Cosmos DB ---
-print("DEBUG: Initializing Cosmos DB...") # AJOUT DEBUG
+print("DEBUG: Initializing Cosmos DB...")
 cosmos_client_instance_global = None
 container_client = None
 if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
     try:
         cosmos_client_instance_global = CosmosClient(COSMOS_DB_ENDPOINT, credential=COSMOS_DB_KEY)
-        # Utiliser get_database_client pour ne pas tenter de créer si déjà là et éviter des permissions limitées
-        database_client = cosmos_client_instance_global.get_database_client(id=DATABASE_NAME) 
         
-        # Tenter de se connecter au conteneur existant
-        container_client = database_client.get_container_client(id=CONTAINER_NAME)
+        # Créer la base de données si elle n'existe pas
+        database_client = cosmos_client_instance_global.create_database_if_not_exists(id=DATABASE_NAME)
+        print(f"Base de données '{DATABASE_NAME}' prête.")
         
-        print("Connecté à Cosmos DB avec succès.")
-    except exceptions.CosmosResourceNotFoundError:
-        print(f"ERREUR CRITIQUE: Base de données ou conteneur Cosmos DB introuvable. Assurez-vous qu'ils existent: {DATABASE_NAME}/{CONTAINER_NAME}")
-        container_client = None # S'assurer qu'il est None si non trouvé
+        # Définir le chemin de la clé de partition
+        partition_key_path = PartitionKey(path="/id") # Assure-toi que c'est bien ta clé de partition
+        
+        # Créer le conteneur s'il n'existe pas
+        container_client = database_client.create_container_if_not_exists(
+            id=CONTAINER_NAME,  # 'id' est correct ici pour le nom du conteneur à créer
+            partition_key=partition_key_path,
+            offer_throughput=400 # Optionnel, ajuste si besoin
+        )
+        print(f"Conteneur '{CONTAINER_NAME}' prêt dans la base '{DATABASE_NAME}'.")
+        
+        print("Connecté et configuré avec Cosmos DB avec succès.")
+
+    except TypeError as te:
+        print(f"ERREUR CRITIQUE (TypeError) lors de l'initialisation de Cosmos DB (probablement un mauvais argument pour une méthode client): {te}\n{traceback.format_exc()}")
+        container_client = None
+    except exceptions.CosmosHttpResponseError as e_http:
+        # Capturer les erreurs HTTP spécifiques de Cosmos (permissions, etc.)
+        print(f"ERREUR CRITIQUE (CosmosHttpResponseError) lors de l'initialisation de Cosmos DB: {e_http.message}\n{traceback.format_exc()}")
+        container_client = None
     except Exception as e:
         print(f"ERREUR CRITIQUE lors de l'initialisation de Cosmos DB: {e}\n{traceback.format_exc()}")
         container_client = None
 else:
     print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages et les recherches seront désactivées.")
-print("DEBUG: Cosmos DB init complete.") # AJOUT DEBUG
+print("DEBUG: Cosmos DB init complete.")
 
 
 # --- Fonctions utilitaires ---
