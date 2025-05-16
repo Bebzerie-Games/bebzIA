@@ -13,7 +13,8 @@ print("DEBUG: Script starting...")
 
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-ALLOWED_USER_ID_STR = os.getenv("ALLOWED_USER_ID")
+# --- MODIFICATION: Renommer pour refléter plusieurs IDs ---
+ALLOWED_USER_IDS_STR = os.getenv("ALLOWED_USER_IDS") # Au pluriel
 COSMOS_DB_ENDPOINT = os.getenv("COSMOS_DB_ENDPOINT")
 COSMOS_DB_KEY = os.getenv("COSMOS_DB_KEY")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
@@ -26,9 +27,7 @@ AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 
 print("DEBUG: Env variables loaded.")
 
-# --- MODIFICATION : Définir comme constante globale ---
 MAX_MESSAGES_FOR_SUMMARY_CONFIG = 100 
-# ----------------------------------------------------
 
 from openai import AsyncAzureOpenAI, APIError, APIConnectionError, RateLimitError
 
@@ -85,10 +84,7 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
         return None
 
     paris_tz = pytz.timezone('Europe/Paris')
-    # Utilisation de la date fournie pour la référence, sinon la date actuelle
-    # Pour les tests, on peut fixer une date de référence ici. Pour la prod, datetime.datetime.now(paris_tz)
-    # current_time_paris = datetime.datetime.strptime("2025-05-16 14:40:12", "%Y-%m-%d %H:%M:%S").replace(tzinfo=paris_tz)
-    current_time_paris = datetime.datetime.now(paris_tz) # Utiliser l'heure actuelle en production
+    current_time_paris = datetime.datetime.now(paris_tz) 
         
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
    
@@ -159,7 +155,7 @@ Question de l'utilisateur :
                 {"role": "user", "content": user_query}
             ],
             temperature=0.2,
-            max_tokens=350, # Un peu plus de marge pour les dates calculées dans les exemples
+            max_tokens=350,
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
@@ -198,7 +194,6 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     if not messages_list:
         return "Aucun message à résumer."
 
-    # Utiliser la constante globale définie en haut du script
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY_CONFIG]
     
     formatted_messages = ""
@@ -312,13 +307,8 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except RateLimitError as e:
         error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}."
-        # Spécifier le type d'erreur dans le message utilisateur peut être utile
         if "context_length_exceeded" in str(e):
-             # Ce cas devrait être moins fréquent maintenant avec MAX_MESSAGES_FOR_SUMMARY_CONFIG plus bas
-             # Mais on le garde au cas où.
             await send_bot_log_message(f"Erreur de limite de taux (Synthèse) - Dépassement de la longueur du contexte: {e}", source="AI-SUMMARY")
-            # On pourrait vouloir retourner un message spécifique ou None pour que ask_command le gère
-            # Pour l'instant, on logue et on retourne None, ce qui mènera à "Désolé, je n'ai pas réussi à générer de résumé..."
             return None 
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except Exception as e:
@@ -327,7 +317,6 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
 
 print("DEBUG: AI functions defined.")
 
-# ... (le reste du code reste identique jusqu'à ask_command) ...
 print("DEBUG: Initializing Discord Intents and Bot...")
 intents = discord.Intents.default()
 intents.messages = True
@@ -340,15 +329,38 @@ print("DEBUG: Discord Bot object created.")
 print("DEBUG: Converting IDs...")
 TARGET_CHANNEL_ID = None
 LOG_CHANNEL_ID = None
-ALLOWED_USER_ID = None
+# --- MODIFICATION: Initialiser une liste pour les IDs autorisés ---
+ALLOWED_USER_IDS_LIST = [] 
+# -------------------------------------------------------------
+
 try:
     if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
     if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
-    if ALLOWED_USER_ID_STR: ALLOWED_USER_ID = int(ALLOWED_USER_ID_STR)
-except ValueError:
-    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide. Vérifiez vos variables d'environnement.")
-    import sys; sys.exit(1)
+    
+    # --- MODIFICATION : Traiter la chaîne des IDs autorisés ---
+    if ALLOWED_USER_IDS_STR: # Vérifier si la chaîne existe
+        ids_str_list = ALLOWED_USER_IDS_STR.split(',') 
+        for user_id_str in ids_str_list:
+            user_id_str = user_id_str.strip() 
+            if user_id_str: 
+                try:
+                    ALLOWED_USER_IDS_LIST.append(int(user_id_str))
+                except ValueError:
+                    print(f"AVERTISSEMENT: L'ID utilisateur '{user_id_str}' n'est pas un entier valide et sera ignoré.")
+    # ---------------------------------------------------------
+
+except ValueError: # Attrapera les erreurs de int() pour TARGET_CHANNEL_ID et LOG_CHANNEL_ID
+    print("ERREUR CRITIQUE: Un ID de canal (TARGET ou LOG) n'est pas un entier valide. Vérifiez vos variables d'environnement.")
+    import sys
+    sys.exit(1)
+
+if ALLOWED_USER_IDS_LIST:
+    print(f"DEBUG: Allowed user IDs loaded: {ALLOWED_USER_IDS_LIST}")
+else:
+    print("DEBUG: No specific user IDs are restricted for the 'ask' command (ALLOWED_USER_IDS not set or empty).")
+    
 print("DEBUG: ID conversion complete.")
+
 
 print("DEBUG: Initializing Cosmos DB...")
 cosmos_client_instance_global = None
@@ -521,8 +533,12 @@ async def ping(ctx):
 @bot.command(name='ask', help="Pose une question sur l'historique des messages. L'IA tentera de trouver les messages pertinents.")
 async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD"
-    if ALLOWED_USER_ID is not None and ctx.author.id != ALLOWED_USER_ID:
+    
+    # --- MODIFICATION : Vérification de l'utilisateur par rapport à la liste ---
+    if ALLOWED_USER_IDS_LIST and ctx.author.id not in ALLOWED_USER_IDS_LIST:
         await ctx.send("Désolé, cette commande est actuellement restreinte."); return
+    # ---------------------------------------------------------------------
+    
     await ctx.send(f"Recherche en cours pour : \"{question}\" ... Veuillez patienter.")
 
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
@@ -575,13 +591,10 @@ async def ask_command(ctx, *, question: str):
             except Exception as e_embed:
                  await ctx.send(f"**Résumé ({len(items)} msgs):**\n{ai_summary}\n*(Erreur Embed: {e_embed})*")
                  print(f"Erreur Embed: {e_embed}\n{traceback.format_exc()}")
-            # --- MODIFICATION : Utiliser la constante globale pour le log ---
             await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages (résumé basé sur les {min(len(items), MAX_MESSAGES_FOR_SUMMARY_CONFIG)} premiers). Résultat envoyé.", source=log_source)
         else:
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
-            # Le log d'échec de la synthèse est déjà fait dans get_ai_summary si une exception API survient
-            # Ajouter un log ici si get_ai_summary retourne None sans exception API (ex: liste de messages vide après filtrage)
-            if not ai_summary : # S'assurer que le log n'est pas redondant si get_ai_summary a déjà loggué une erreur API
+            if not ai_summary : 
                 await send_bot_log_message(f"Synthèse retournée comme None pour {len(items)} messages (raison non-API, ex: messages_to_summarize vide).", source=log_source)
 
     except exceptions.CosmosHttpResponseError as e:
