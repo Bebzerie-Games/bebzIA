@@ -91,6 +91,13 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
     Interroge Azure OpenAI pour obtenir une requête SQL Cosmos DB basée sur la question de l'utilisateur.
     Retourne la chaîne de la requête SQL ou None en cas d'échec.
     """
+    first_guild_id_for_link = None
+    guild_id = item.get("guild_id")
+    if i == 0 and message_id and channel_id and guild_id: # Ajout de guild_id
+        first_message_id_for_link = message_id
+        first_channel_id_for_link = channel_id
+        first_guild_id_for_link = guild_id
+
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client: # Vérification du client aussi
         print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
         await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY-SQL-GEN")
@@ -100,10 +107,22 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
     paris_tz = pytz.timezone('Europe/Paris')
     current_time_paris = datetime.datetime.now(paris_tz)
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
+   
+    # Garder en mémoire les IDs du premier message pour le lien
+    await send_bot_log_message(f"DEBUG Lien: first_msg_id={first_message_id_for_link}, first_chan_id={first_channel_id_for_link}", source="AI-SUMMARY-DEBUG")
 
     system_prompt = f"""
-Tu es un assistant IA spécialisé dans la conversion de questions en langage naturel en requêtes SQL optimisées pour Azure Cosmos DB.
-Ta tâche est d'analyser la question de l'utilisateur et de générer UNIQUEMENT la requête SQL correspondante pour interroger une base de données Cosmos DB contenant des messages Discord.
+Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
+Tu recevras une liste de messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
+Chaque message est séparé par une ligne "---".
+Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent, en te basant STRICTEMENT sur le contenu des messages fournis.
+Ne mentionne des participants ou des sujets que s'ils sont explicitement présents dans les messages que tu analyses. N'invente pas et ne suppose pas d'informations non présentes.
+L'ID du serveur (guild) du premier message pertinent est : {first_guild_id_for_link if first_guild_id_for_link else 'Non fourni'}
+L'ID du canal du premier message pertinent est : {first_channel_id_for_link if first_channel_id_for_link else 'Non fourni'}
+L'ID du premier message pertinent est : {first_message_id_for_link if first_message_id_for_link else 'Non fourni'}
+Si ces TROIS IDs sont fournis et valides, construis le lien comme suit : https://discord.com/channels/{first_guild_id_for_link}/{first_channel_id_for_link}/{first_message_id_for_link}
+Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées.
+Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
 
 L'utilisateur actuel qui pose la question est : {requesting_user_name}
 
@@ -161,6 +180,10 @@ Exemples (date de référence 2025-05-16 Paris) :
   IA: SELECT TOP 1 c.id, c.channel_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.content, "exemple", true) ORDER BY c.timestamp_iso ASC
 - Utilisateur: "auteur du premier message contenant 'exemple'"
   IA: SELECT TOP 1 c.author_name FROM c WHERE CONTAINS(c.content, "exemple", true) ORDER BY c.timestamp_iso ASC
+- Utilisateur: " 50 derniers messages " 
+  IA: SELECT TOP 50 * FROM c ORDER BY c.timestamp_iso DESC
+- Utilisateur: " 50 premiers messages "
+  IA: SELECT TOP 50 * FROM c ORDER BY c.timestamp_iso ASC
 
 
 Question de l'utilisateur :
