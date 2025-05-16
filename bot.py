@@ -302,6 +302,7 @@ Mets en évidence les sujets principaux, les points clés, et les informations i
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
 Pour les pseudos des utilisateurs donc "author_name" ou "author_display_name", les noms réels des personnes sont : 
 Lamerdeoffline ou Lamerde: Luka
+hezek112 ou hezekiel : Enzo
 FlyXOwl ou Fly: Théo
 airzya ou azyria : Vincent
 wkda_ledauphin ou ledauphin : Nathan
@@ -314,7 +315,8 @@ ttv_yunix ou yunix : Liam
     - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
     - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
     - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
-Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 250 mots).
+Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/{channel_id}/{message_id} (ex: https://discord.com/channels/123456789012345678/123456789012345678)
+Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 300 mots).
 """
 
     user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n\nRésumé de la discussion :"
