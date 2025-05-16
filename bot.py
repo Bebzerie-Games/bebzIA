@@ -10,6 +10,7 @@ import pytz
 import dateutil.parser 
 import sys 
 import collections 
+import re # Ajouté pour l'extraction des causes de filtrage
 
 print("DEBUG: Script starting...")
 
@@ -39,7 +40,7 @@ IS_AZURE_OPENAI_CONFIGURED = False
 if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY and AZURE_OPENAI_DEPLOYMENT_NAME:
     try:
         azure_openai_client = AsyncAzureOpenAI(
-            api_version="2023-07-01-preview",
+            api_version="2023-07-01-preview", # Assurez-vous que cette version est compatible avec les détails de content_filter_result
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
         )
@@ -53,7 +54,6 @@ else:
 
 print("DEBUG: Azure OpenAI init complete.")
 
-# Variable globale pour l'ID du canal de log (sera initialisée plus tard)
 LOG_CHANNEL_ID_VAR_FOR_SEND = None
 
 async def send_bot_log_message(message_content: str, source: str = "BOT", send_to_discord_channel: bool = False, is_openai_filter_log: bool = False):
@@ -61,11 +61,9 @@ async def send_bot_log_message(message_content: str, source: str = "BOT", send_t
     timestamp_utc_display = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
     log_prefix = f"[{source.upper()}]"
     
-    # Toujours imprimer en console
     console_message = f"[{timestamp_utc_display}] {log_prefix} {message_content}"
     print(console_message)
 
-    # Ajouter aux logs globaux si pertinent pour !caca
     source_upper = source.upper()
     if source_upper.startswith("ASK-CMD") or \
        source_upper.startswith("AI-QUERY-SQL-GEN") or \
@@ -78,33 +76,77 @@ async def send_bot_log_message(message_content: str, source: str = "BOT", send_t
             log_entry_for_caca = log_entry_for_caca[:max_single_log_entry_len - 20] + "... (entry truncated)"
         GLOBAL_ASK_COMMAND_LOGS.append(log_entry_for_caca)
 
-    # Envoyer sur Discord si demandé et si le canal est configuré
     if send_to_discord_channel and LOG_CHANNEL_ID_VAR_FOR_SEND and 'bot' in globals() and bot.is_ready():
         try:
             log_channel_obj = bot.get_channel(LOG_CHANNEL_ID_VAR_FOR_SEND)
             if log_channel_obj:
                 discord_message_content = message_content
-                if is_openai_filter_log: # Ajouter l'émoji pour les logs de filtrage OpenAI
+                if is_openai_filter_log: 
                     discord_message_content = f"❌ {message_content}"
                 
-                # Utilisation du format de l'image: Timestamp UTC [SOURCE] contenu
-                # L'heure de Paris n'est plus ajoutée ici pour correspondre à l'image
                 full_log_message_for_discord = f"{timestamp_utc_display} {log_prefix}\n{discord_message_content}"
                 
-                max_discord_len = 1900 # Pour être sûr avec les ``` et autres
+                max_discord_len = 1900 
                 if len(full_log_message_for_discord) > max_discord_len:
-                    # Tronquer discord_message_content si nécessaire
-                    chars_to_remove = len(full_log_message_for_discord) - max_discord_len + 25 # +25 pour " ... (Tronqué)"
+                    chars_to_remove = len(full_log_message_for_discord) - max_discord_len + 25 
                     if chars_to_remove > 0 :
-                         discord_message_content = discord_message_content[:-chars_to_remove] + "... (Tronqué)"
+                         original_content_len = len(discord_message_content)
+                         discord_message_content = discord_message_content[:max(0, original_content_len - chars_to_remove)] + "... (Tronqué)"
                     full_log_message_for_discord = f"{timestamp_utc_display} {log_prefix}\n{discord_message_content}"
-
 
                 await log_channel_obj.send(f"```\n{full_log_message_for_discord}\n```")
             else:
                 print(f"[{timestamp_utc_display}] [SEND_LOG_WARN] Log channel ID {LOG_CHANNEL_ID_VAR_FOR_SEND} non trouvé pour envoi Discord.")
         except Exception as e:
             print(f"[{timestamp_utc_display}] [SEND_LOG_ERROR] Erreur envoi log Discord: {e}\n{traceback.format_exc()}")
+
+def _extract_openai_filter_details(e: APIError) -> str:
+    """Tente d'extraire les détails du filtrage de contenu d'une APIError."""
+    filter_type_detected = "type de filtre inconnu"
+    detailed_error_message = str(e)
+
+    try:
+        if hasattr(e, 'body') and e.body and isinstance(e.body, dict) and 'error' in e.body:
+            error_obj = e.body['error']
+            # Message d'erreur principal pour le log
+            detailed_error_message = f"Code: {error_obj.get('code')}, Message: {error_obj.get('message', str(e))}"
+
+            # Vérifier si c'est une erreur de filtrage de contenu
+            is_content_filter_error = error_obj.get('code') == 'content_filter' or \
+                                     (error_obj.get('innererror') and error_obj['innererror'].get('code') == 'ResponsibleAIPolicyViolation')
+
+            if is_content_filter_error:
+                filtered_categories_details = []
+                # Tenter d'extraire les catégories spécifiques du champ content_filter_result
+                if error_obj.get('innererror') and 'content_filter_result' in error_obj['innererror']:
+                    content_filter_res = error_obj['innererror']['content_filter_result']
+                    if isinstance(content_filter_res, dict): # S'assurer que c'est un dictionnaire
+                        for category, result in content_filter_res.items():
+                            if isinstance(result, dict) and result.get('filtered') is True:
+                                severity = result.get('severity', 'N/A')
+                                filtered_categories_details.append(f"{category} (sévérité: {severity})")
+                
+                # Si aucune catégorie spécifique n'est trouvée via la structure, essayer de parser le message
+                if not filtered_categories_details and error_obj.get('message'):
+                    match = re.search(r"Causes:\s*\[([^\]]+)\]", error_obj.get('message', ''))
+                    if match:
+                        causes_str = match.group(1)
+                        parsed_causes = [cause.strip().strip("'\"") for cause in causes_str.split(',')]
+                        if parsed_causes:
+                            filtered_categories_details = parsed_causes
+                
+                if filtered_categories_details:
+                    filter_type_detected = ", ".join(filtered_categories_details)
+                else: # Fallback si aucune catégorie spécifique n'est extraite
+                    filter_type_detected = error_obj.get('code', 'filtrage de contenu générique')
+                
+                return f"Violation de filtre de contenu. Type(s) détecté(s): {filter_type_detected}. (Détail API: {detailed_error_message})"
+    except Exception as parse_exc:
+        print(f"DEBUG: Exception lors du parsing de APIError pour les détails du filtre: {parse_exc}")
+        # Retourner l'erreur originale si le parsing échoue
+        return f"Erreur API OpenAI (parsing des détails du filtre échoué): {str(e)}"
+        
+    return f"Erreur API OpenAI : {detailed_error_message}"
 
 
 async def get_ai_analysis(user_query: str, requesting_user_name_with_id: str) -> str | None:
@@ -172,7 +214,7 @@ Instructions pour la génération de la requête :
         )
         
         if response.usage:
-            await send_bot_log_message( # Ce log n'ira pas sur Discord par défaut
+            await send_bot_log_message(
                 f"Utilisation des tokens (SQL Gen): Prompt={response.usage.prompt_tokens}, Completion={response.usage.completion_tokens}, Total={response.usage.total_tokens}\nDemandé par: {requesting_user_name_with_id} pour la question: '{user_query}'",
                 source="AI-TOKEN-USAGE" 
             )
@@ -190,8 +232,9 @@ Instructions pour la génération de la requête :
             await send_bot_log_message(f"Aucune réponse ou contenu de message valide d'Azure OpenAI pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True)
             return None
     except APIError as e:
-        error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
-        await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
+        error_details = _extract_openai_filter_details(e)
+        error_message_to_log = f"{error_details}. Demandé par: {requesting_user_name_with_id} pour la question: '{user_query}'"
+        await send_bot_log_message(error_message_to_log, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
     except APIConnectionError as e:
         error_message = f"Erreur de connexion Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
@@ -202,55 +245,16 @@ Instructions pour la génération de la requête :
         error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (SQL Gen) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
 
-# ... (le reste du code de get_ai_summary, format_message_to_json, main_message_fetch_logic, scheduled_message_fetch, etc. reste identique)
-# ... jusqu'à la définition de LOG_CHANNEL_ID_VAR_FOR_SEND ...
 
-print("DEBUG: AI functions defined.")
-
-intents = discord.Intents.default()
-intents.messages, intents.message_content, intents.guilds = True, True, True
-bot = commands.Bot(command_prefix="!", intents=intents)
-print("DEBUG: Discord Bot object created.")
-
-TARGET_CHANNEL_ID, LOG_CHANNEL_ID_VAR, ALLOWED_USER_IDS_LIST = None, None, []
-
-try:
-    if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
-    if LOG_CHANNEL_ID_STR: 
-        LOG_CHANNEL_ID_VAR = int(LOG_CHANNEL_ID_STR)
-        LOG_CHANNEL_ID_VAR_FOR_SEND = LOG_CHANNEL_ID_VAR # Assigner à la variable globale
-    
-    if ALLOWED_USER_IDS_STR:
-        for user_id_str in ALLOWED_USER_IDS_STR.split(','):
-            user_id_str = user_id_str.strip()
-            if user_id_str: 
-                try: ALLOWED_USER_IDS_LIST.append(int(user_id_str))
-                except ValueError: print(f"AVERTISSEMENT: ID utilisateur '{user_id_str}' invalide.")
-except ValueError:
-    print("ERREUR CRITIQUE: ID de canal (TARGET ou LOG) invalide.")
-    sys.exit(1)
-
-if ALLOWED_USER_IDS_LIST: print(f"DEBUG: Allowed user IDs: {ALLOWED_USER_IDS_LIST}")
-else: print("DEBUG: 'ask' non restreint (ALLOWED_USER_IDS vide/non défini).")
-if LOG_CHANNEL_ID_VAR_FOR_SEND: print(f"DEBUG: Log Channel ID pour les erreurs OpenAI: {LOG_CHANNEL_ID_VAR_FOR_SEND}")
-else: print("DEBUG: LOG_CHANNEL_ID non configuré, les erreurs OpenAI spécifiques ne seront pas envoyées sur un canal Discord.")
-
-print("DEBUG: ID conversion complete.")
-
-# ... (le reste du code, y compris l'initialisation de Cosmos DB, format_message_to_json, main_message_fetch_logic, scheduled_message_fetch, on_ready, ping, ask_command, caca_command)
-# ... Les fonctions get_ai_summary, format_message_to_json, etc. ne sont pas modifiées dans cette passe,
-# ... car la demande se concentrait sur les logs d'erreur de get_ai_analysis.
-
-# ----- DEBUT DU CODE NON MODIFIÉ (POUR CONCISION) -----
 async def get_ai_summary(messages_list: list[dict], requesting_user_name_with_id: str) -> str | None:
-    log_source_prefix = "AI-SUMMARY" # Modifié pour être cohérent
+    log_source_prefix = "AI-SUMMARY"
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
-        # Pourrait aussi envoyer sur Discord si c'est une erreur critique pour toi
-        await send_bot_log_message(f"Tentative d'appel à l'IA (Synthèse) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name_with_id}", source=log_source_prefix, send_to_discord_channel=False) # False par défaut
+        await send_bot_log_message(f"Tentative d'appel à l'IA (Synthèse) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name_with_id}", source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True)
         return None
     if not messages_list:
         return "Aucun message à résumer."
 
+    # ... (le reste de la préparation des messages pour get_ai_summary est identique)
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY_CONFIG]
     formatted_messages = ""
     paris_tz = pytz.timezone('Europe/Paris')
@@ -272,7 +276,7 @@ async def get_ai_summary(messages_list: list[dict], requesting_user_name_with_id
                 date_fmt = dt_obj.astimezone(paris_tz).strftime("%Y-%m-%d %H:%M")
             except Exception: date_fmt = timestamp_str 
         formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
-
+    
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
 Tu recevras une liste d'environ {len(messages_to_summarize)} messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
@@ -305,6 +309,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
 """
     user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n\nRésumé de la discussion :"
 
+
     try:
         response = await azure_openai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT_NAME,
@@ -317,7 +322,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
         )
 
         if response.usage:
-            await send_bot_log_message( # Ce log n'ira pas sur Discord par défaut
+            await send_bot_log_message(
                 f"Utilisation des tokens (Synthèse): Prompt={response.usage.prompt_tokens}, Completion={response.usage.completion_tokens}, Total={response.usage.total_tokens}\nPour {len(messages_to_summarize)} messages. Demandé par: {requesting_user_name_with_id}",
                 source="AI-TOKEN-USAGE"
             )
@@ -325,22 +330,57 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             summary = response.choices[0].message.content.strip()
             return summary
-        else: # Erreur de contenu de réponse de l'IA pour la synthèse
+        else:
             await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse. Demandé par: {requesting_user_name_with_id}", source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True)
             return None
-    except APIError as e: # Erreurs API spécifiques pour la synthèse
-        error_message = f"Erreur API Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
-        await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
+    except APIError as e:
+        error_details = _extract_openai_filter_details(e)
+        error_message_to_log = f"{error_details}. Demandé par: {requesting_user_name_with_id}"
+        await send_bot_log_message(error_message_to_log, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
     except APIConnectionError as e:
         error_message = f"Erreur de connexion Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
     except RateLimitError as e:
         error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
-    except Exception as e: # Erreur générique pour la synthèse
+    except Exception as e:
         error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (Synthèse) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source=log_source_prefix, send_to_discord_channel=True, is_openai_filter_log=True); return None
 
+# ----- LE RESTE DU CODE EST IDENTIQUE À LA VERSION PRÉCÉDENTE -----
+# (Initialisation du bot, variables, CosmosDB, format_message_to_json, main_message_fetch_logic, scheduled_message_fetch, on_ready, ping, ask_command, caca_command)
+
+print("DEBUG: AI functions defined.")
+
+intents = discord.Intents.default()
+intents.messages, intents.message_content, intents.guilds = True, True, True
+bot = commands.Bot(command_prefix="!", intents=intents)
+print("DEBUG: Discord Bot object created.")
+
+TARGET_CHANNEL_ID, LOG_CHANNEL_ID_VAR, ALLOWED_USER_IDS_LIST = None, None, []
+
+try:
+    if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
+    if LOG_CHANNEL_ID_STR: 
+        LOG_CHANNEL_ID_VAR = int(LOG_CHANNEL_ID_STR)
+        LOG_CHANNEL_ID_VAR_FOR_SEND = LOG_CHANNEL_ID_VAR # Assigner à la variable globale
+    
+    if ALLOWED_USER_IDS_STR:
+        for user_id_str in ALLOWED_USER_IDS_STR.split(','):
+            user_id_str = user_id_str.strip()
+            if user_id_str: 
+                try: ALLOWED_USER_IDS_LIST.append(int(user_id_str))
+                except ValueError: print(f"AVERTISSEMENT: ID utilisateur '{user_id_str}' invalide.")
+except ValueError:
+    print("ERREUR CRITIQUE: ID de canal (TARGET ou LOG) invalide.")
+    sys.exit(1)
+
+if ALLOWED_USER_IDS_LIST: print(f"DEBUG: Allowed user IDs: {ALLOWED_USER_IDS_LIST}")
+else: print("DEBUG: 'ask' non restreint (ALLOWED_USER_IDS vide/non défini).")
+if LOG_CHANNEL_ID_VAR_FOR_SEND: print(f"DEBUG: Log Channel ID pour les erreurs OpenAI: {LOG_CHANNEL_ID_VAR_FOR_SEND}")
+else: print("DEBUG: LOG_CHANNEL_ID non configuré, les erreurs OpenAI spécifiques ne seront pas envoyées sur un canal Discord.")
+
+print("DEBUG: ID conversion complete.")
 
 cosmos_client_instance_global, container_client = None, None
 if all([COSMOS_DB_ENDPOINT, COSMOS_DB_KEY, DATABASE_NAME, CONTAINER_NAME]):
@@ -463,15 +503,16 @@ async def ask_command(ctx, *, question: str):
         await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Azure OpenAI non configuré. Q: '{question}'", source=log_source, send_to_discord_channel=True, is_openai_filter_log=True); return
     if not container_client:
         await ctx.send("Désolé, la connexion à la base de données n'est pas active.")
-        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Client Cosmos DB non initialisé. Q: '{question}'", source=log_source, send_to_discord_channel=True, is_openai_filter_log=True); return # Peut-être pas un "filter log" OpenAI, mais une erreur critique
+        # Note: is_openai_filter_log=False car ce n'est pas un filtre OpenAI
+        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Client Cosmos DB non initialisé. Q: '{question}'", source=log_source, send_to_discord_channel=True, is_openai_filter_log=False); return 
 
     generated_sql_query = await get_ai_analysis(question, user_name_for_log) 
     
-    if not generated_sql_query: await ctx.send("Je n'ai pas réussi à interpréter votre question."); return # Le log est déjà fait dans get_ai_analysis
-    if generated_sql_query == "NO_QUERY_POSSIBLE": await ctx.send("Je ne peux pas formuler de requête. Essayez de reformuler."); return # Log fait dans get_ai_analysis
-    if generated_sql_query == "INVALID_QUERY_FORMAT": await ctx.send("L'IA a retourné une réponse inattendue."); return # Log fait dans get_ai_analysis
+    if not generated_sql_query: await ctx.send("Je n'ai pas réussi à interpréter votre question."); return 
+    if generated_sql_query == "NO_QUERY_POSSIBLE": await ctx.send("Je ne peux pas formuler de requête. Essayez de reformuler."); return 
+    if generated_sql_query == "INVALID_QUERY_FORMAT": await ctx.send("L'IA a retourné une réponse inattendue."); return 
     
-    await send_bot_log_message(f"Génération SQL pour '{question}' par {user_name_for_log} terminée. Requête : {generated_sql_query}", source="ASK-CMD-SQL-READY") # Pas envoyé sur Discord
+    await send_bot_log_message(f"Génération SQL pour '{question}' par {user_name_for_log} terminée. Requête : {generated_sql_query}", source="ASK-CMD-SQL-READY") 
 
     try:
         items = list(container_client.query_items(query=generated_sql_query, enable_cross_partition_query=True))
@@ -533,10 +574,9 @@ async def ask_command(ctx, *, question: str):
             log_msg_succ = (f"Synthèse réussie pour {len(items)} messages. Demandé par: {user_name_for_log} Q: '{question}'. "
                             f"Résumé basé sur {min(len(items), MAX_MESSAGES_FOR_SUMMARY_CONFIG)} premiers.")
             await send_bot_log_message(log_msg_succ, source=log_source)
-        else: # ai_summary is None
+        else: 
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
             # Le log d'erreur de get_ai_summary (si OpenAI a échoué) aura déjà été envoyé avec send_to_discord_channel=True
-
 
     except exceptions.CosmosHttpResponseError as e:
         error_msg_user = "Erreur lors de la recherche dans la base de données."
@@ -545,10 +585,10 @@ async def ask_command(ctx, *, question: str):
         elif "Request rate is large" in str(e):
              error_msg_user = "Base de données temporairement surchargée. Réessayez plus tard."
         await ctx.send(error_msg_user)
-        await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} Q: '{question}'\n{traceback.format_exc()}", source=log_source, send_to_discord_channel=True, is_openai_filter_log=True) # Erreur Cosmos DB aussi sur Discord
+        await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} Q: '{question}'\n{traceback.format_exc()}", source=log_source, send_to_discord_channel=True, is_openai_filter_log=False) # is_openai_filter_log=False
     except Exception as e:
         await ctx.send("Une erreur inattendue s'est produite.")
-        await send_bot_log_message(f"Erreur inattendue ask_cmd pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} Q: '{question}'\n{traceback.format_exc()}", source=log_source, send_to_discord_channel=True, is_openai_filter_log=True) # Erreur générique aussi sur Discord
+        await send_bot_log_message(f"Erreur inattendue ask_cmd pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} Q: '{question}'\n{traceback.format_exc()}", source=log_source, send_to_discord_channel=True, is_openai_filter_log=False) # is_openai_filter_log=False
 
 @bot.command(name='caca', help="Affiche les 50 derniers logs pertinents des commandes !ask.")
 async def caca_command(ctx):
@@ -577,11 +617,13 @@ async def caca_command(ctx):
 
     for log_entry in reversed(logs_to_display): 
         entry_with_newline = log_entry + "\n"
-        if current_length + len(entry_with_newline) <= MAX_DESC_LENGTH - len(TRUNCATION_EMBED_NOTICE): # Réserver de la place
+        # Réserver de la place pour le message de troncature potentiel
+        if current_length + len(entry_with_newline) <= MAX_DESC_LENGTH - (len(TRUNCATION_EMBED_NOTICE) if len(logs_to_display) > (50 * 0.8) else 0) : # Heuristique pour ajouter la notice de troncature
             description_content_parts.append(entry_with_newline)
             current_length += len(entry_with_newline)
         else:
-            description_content_parts.append(TRUNCATION_EMBED_NOTICE)
+            if not any(TRUNCATION_EMBED_NOTICE in part for part in description_content_parts): # Ajouter une seule fois
+                 description_content_parts.append(TRUNCATION_EMBED_NOTICE)
             await send_bot_log_message(f"!caca: Description de l'embed tronquée. Demandé par {user_name_for_log}", source=log_source)
             break 
             
@@ -598,7 +640,6 @@ async def caca_command(ctx):
         await send_bot_log_message(f"Erreur envoi embed !caca: {e}. Demandé par {user_name_for_log}", source=log_source)
         await ctx.send("Erreur lors de la création de l'embed des logs. Les logs sont peut-être trop volumineux.")
 
-# ----- FIN DU CODE NON MODIFIÉ (POUR CONCISION) -----
 
 if __name__ == "__main__":
     if DISCORD_BOT_TOKEN:
