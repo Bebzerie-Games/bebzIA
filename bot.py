@@ -79,21 +79,20 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
     Interroge Azure OpenAI pour obtenir une requête SQL Cosmos DB basée sur la question de l'utilisateur.
     Retourne la chaîne de la requête SQL ou None en cas d'échec.
     """
-    # La logique pour first_guild_id_for_link, etc. n'appartient PAS à cette fonction.
-    # Elle a été supprimée d'ici.
-    # Le log de debug pour les liens a aussi été supprimé d'ici.
-
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
         print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
         await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY-SQL-GEN")
         return None
 
     paris_tz = pytz.timezone('Europe/Paris')
-    current_time_paris = datetime.datetime.now(paris_tz)
+    # Utilisation de la date fournie pour la référence, sinon la date actuelle
+    try:
+        current_time_paris = datetime.datetime.strptime("2025-05-16 14:40:12", "%Y-%m-%d %H:%M:%S").replace(tzinfo=paris_tz)
+    except ValueError: # Fallback si la date fournie n'est pas valide
+        current_time_paris = datetime.datetime.now(paris_tz)
+        
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
    
-    # Le system_prompt ici est celui pour la GÉNÉRATION SQL.
-    # J'ai remis le prompt SQL original et ajouté les clarifications pour guild_id et l'ordre de tri.
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la conversion de questions en langage naturel en requêtes SQL optimisées pour Azure Cosmos DB.
 Ta tâche est d'analyser la question de l'utilisateur et de générer UNIQUEMENT la requête SQL correspondante pour interroger une base de données Cosmos DB contenant des messages Discord.
@@ -135,9 +134,9 @@ Instructions pour la génération de la requête :
 9.  Pour "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
 10. Pour limiter le nombre de résultats ("le dernier message", "les 5 messages"), utilise `TOP N` après `SELECT`.
 
-Exemples (date de référence 2025-05-16 Paris) :
+Exemples (date de référence {system_current_time_reference}) :
 - Utilisateur: "Messages de FlyXOwl hier"
-  IA: SELECT c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) AND STARTSWITH(c.timestamp_iso, "2025-05-15") ORDER BY c.timestamp_iso DESC
+  IA: SELECT c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.author_name, "FlyXOwl", true) AND STARTSWITH(c.timestamp_iso, "{(current_time_paris - datetime.timedelta(days=1)).strftime('%Y-%m-%d')}") ORDER BY c.timestamp_iso DESC
 - Utilisateur: "Combien de messages le 1er janvier 2025 ?"
   IA: SELECT VALUE COUNT(1) FROM c WHERE STARTSWITH(c.timestamp_iso, "2025-01-01T")
 - Utilisateur: "le premier message contenant 'salut'"
@@ -150,6 +149,9 @@ Exemples (date de référence 2025-05-16 Paris) :
   IA: SELECT TOP 50 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c ORDER BY c.timestamp_iso ASC
 - Utilisateur: "les 50 derniers messages"
   IA: SELECT TOP 50 c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c ORDER BY c.timestamp_iso DESC
+- Utilisateur: "messages de cette semaine"
+  IA: SELECT c.id, c.channel_id, c.guild_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE c.timestamp_iso >= "{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z" AND c.timestamp_iso <= "{current_time_paris.strftime('%Y-%m-%d')}T23:59:59.999Z" ORDER BY c.timestamp_iso DESC
+
 
 Question de l'utilisateur :
 """
@@ -161,7 +163,7 @@ Question de l'utilisateur :
                 {"role": "user", "content": user_query}
             ],
             temperature=0.2,
-            max_tokens=300, # Augmenté légèrement pour les requêtes plus longues avec tous les champs
+            max_tokens=300,
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
@@ -200,19 +202,20 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     if not messages_list:
         return "Aucun message à résumer."
 
-    MAX_MESSAGES_FOR_SUMMARY = 1000
+    ### MODIFICATION ### Valeur plus sûre pour MAX_MESSAGES_FOR_SUMMARY
+    MAX_MESSAGES_FOR_SUMMARY = 100
     formatted_messages = ""
     paris_tz = pytz.timezone('Europe/Paris')
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
 
     first_message_id_for_link = None
     first_channel_id_for_link = None
-    first_guild_id_for_link = None #MODIFICATION #Ajout pour stocker guild_id
+    first_guild_id_for_link = None
 
     for i, item in enumerate(messages_to_summarize):
         author = item.get("author_name", "Auteur inconnu")
-        author_display = item.get("author_display_name") # Récupérer author_display_name
-        if author_display: # Utiliser author_display_name si disponible
+        author_display = item.get("author_display_name")
+        if author_display:
              author = author_display
 
         timestamp_str = item.get("timestamp_iso")
@@ -220,12 +223,12 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
         
         message_id = item.get("id")
         channel_id = item.get("channel_id")
-        guild_id = item.get("guild_id") #MODIFICATION #Récupérer guild_id de l'item
+        guild_id = item.get("guild_id")
 
-        if i == 0 and message_id and channel_id and guild_id: #MODIFICATION #Vérifier guild_id aussi
+        if i == 0 and message_id and channel_id and guild_id:
             first_message_id_for_link = message_id
             first_channel_id_for_link = channel_id
-            first_guild_id_for_link = guild_id #MODIFICATION #Stocker guild_id
+            first_guild_id_for_link = guild_id
 
         date_fmt = "Date inconnue"
         if timestamp_str:
@@ -245,16 +248,16 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
         
         formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
 
-    #MODIFICATION #Ajout du log de debug pour les IDs du lien
     await send_bot_log_message(f"DEBUG Lien: guild_id={first_guild_id_for_link}, chan_id={first_channel_id_for_link}, msg_id={first_message_id_for_link}", source="AI-SUMMARY-DEBUG")
 
+    ### MODIFICATION ### Prompt système renforcé pour la synthèse
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
-Tu recevras une liste de messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
+Tu recevras une liste d'environ {len(messages_to_summarize)} messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
 Chaque message est séparé par une ligne "---".
-Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent, en te basant UNIQUEMENT ET EXCLUSIVEMENT sur le contenu textuel et les auteurs des messages qui te sont fournis dans la section "Voici les messages à résumer :".
-Ne mentionne AUCUN participant ni AUCUN sujet qui ne soit pas explicitement présent et identifiable dans les messages que tu analyses pour CE résumé spécifique.
-Ignore toute connaissance préalable sur les membres du groupe qui ne serait pas confirmée par les messages actuels.
+Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent, **en te basant UNIQUEMENT ET EXCLUSIVEMENT sur le contenu textuel et les auteurs des messages qui te sont fournis dans la section "Voici les messages à résumer :".**
+**Ne mentionne AUCUN participant ni AUCUN sujet qui ne soit pas explicitement présent et identifiable dans les messages que tu analyses pour CE résumé spécifique.**
+**Ignore toute connaissance préalable sur les membres du groupe qui ne serait pas confirmée par les messages actuels.**
 Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées DANS CES MESSAGES.
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
 
@@ -270,7 +273,7 @@ bastos0234/bastos: Bastien ( discord id : 1150107575031963649)
 ttv_yunix/yunix: Liam ( discord id : 735088185771819079)
 .fantaman/fantaman: Khelyan ( discord id : 675351685521997875)
 
-Tu peux tutoyer et utiliser prénoms ou pseudos, mais seulement pour les personnes dont les messages sont effectivement présents dans la liste fournie pour ce résumé.
+Tu peux tutoyer et utiliser prénoms ou pseudos, **mais seulement pour les personnes dont les messages sont effectivement présents dans la liste fournie pour ce résumé.**
 
 À la fin de ton résumé, SI ET SEULEMENT SI les trois IDs (serveur, canal, message) pour le premier message pertinent t'ont été fournis ci-dessous et ne sont pas 'Non fourni', inclus un lien vers ce message.
 L'ID du serveur (guild) du premier message pertinent est : {first_guild_id_for_link if first_guild_id_for_link else 'Non fourni'}
@@ -278,7 +281,7 @@ L'ID du canal du premier message pertinent est : {first_channel_id_for_link if f
 L'ID du premier message pertinent est : {first_message_id_for_link if first_message_id_for_link else 'Non fourni'}
 Si ces TROIS IDs sont fournis et valides (pas 'Non fourni'), construis le lien comme suit : https://discord.com/channels/{first_guild_id_for_link}/{first_channel_id_for_link}/{first_message_id_for_link}
 N'invente pas de lien si les IDs ne sont pas explicitement disponibles.
-Ne mentionne pas les IDs dans le résumé lui-même, seulement le lien formaté à la fin s'il est applicable. Par exemple: Lien vers le message et URL_CONSTRUITE
+Ne mentionne pas les IDs dans le résumé lui-même, seulement le lien formaté à la fin s'il est applicable. Par exemple: [Lien vers le message](URL_CONSTRUITE)
 
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement environ 300 mots mais tu peux aller sur les 1000-2000 mots pour des requetes avec beaucoup de messages).
 """
@@ -291,6 +294,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
+            ### MODIFICATION ### Température plus basse et max_tokens ajusté
             temperature=0.3,
             max_tokens=1500, 
             top_p=0.95,
@@ -479,12 +483,12 @@ async def before_scheduled_fetch():
         print("ERREUR CRITIQUE: TARGET_CHANNEL_ID non configuré. Tâche annulée.")
         await send_bot_log_message("ERREUR CRITIQUE: TARGET_CHANNEL_ID non configuré. Tâche désactivée.", source=log_source)
         valid_config = False
-    if not container_client: # Vérifier container_client, pas cosmos_client_instance_global
+    if not container_client: 
          print("ERREUR CRITIQUE: Client Conteneur Cosmos DB non initialisé. Tâche annulée.")
          await send_bot_log_message("ERREUR CRITIQUE: Conteneur Cosmos DB non initialisé. Tâche désactivée.", source=log_source)
          valid_config = False
     
-    if not valid_config: # Si une config est invalide, annuler
+    if not valid_config: 
         scheduled_message_fetch.cancel()
         await send_bot_log_message("Tâche récupération annulée (config invalide ou Cosmos DB non prêt).", source=log_source)
         return
@@ -551,10 +555,15 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source); return
 
         await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") 
-        ai_summary = await get_ai_summary(items)
+        ai_summary = await get_ai_summary(items) # items contient tous les messages trouvés
 
         if ai_summary:
-            embed = discord.Embed(title=f"Résumé des messages trouvés ({len(items)} messages)", description=ai_summary, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+            embed = discord.Embed(
+                title=f"Résumé des messages trouvés ({len(items)} messages)", # Affiche le nombre total de messages trouvés
+                description=ai_summary, 
+                color=discord.Color.blue(), 
+                timestamp=discord.utils.utcnow()
+            )
             embed.set_footer(text=f"Requête : \"{question}\"")
             try:
                 await ctx.send(embed=embed)
@@ -563,7 +572,7 @@ async def ask_command(ctx, *, question: str):
             except Exception as e_embed:
                  await ctx.send(f"**Résumé ({len(items)} msgs):**\n{ai_summary}\n*(Erreur Embed: {e_embed})*")
                  print(f"Erreur Embed: {e_embed}\n{traceback.format_exc()}")
-            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages. Résultat envoyé.", source=log_source)
+            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages (résumé basé sur les {min(len(items), MAX_MESSAGES_FOR_SUMMARY)} premiers). Résultat envoyé.", source=log_source)
         else:
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
             await send_bot_log_message(f"Synthèse échouée pour {len(items)} messages.", source=log_source)
