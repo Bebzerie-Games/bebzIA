@@ -200,7 +200,7 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     if not messages_list:
         return "Aucun message à résumer."
 
-    MAX_MESSAGES_FOR_SUMMARY = 50 
+    MAX_MESSAGES_FOR_SUMMARY = 1000
     formatted_messages = ""
     paris_tz = pytz.timezone('Europe/Paris')
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
@@ -278,7 +278,7 @@ L'ID du canal du premier message pertinent est : {first_channel_id_for_link if f
 L'ID du premier message pertinent est : {first_message_id_for_link if first_message_id_for_link else 'Non fourni'}
 Si ces TROIS IDs sont fournis et valides (pas 'Non fourni'), construis le lien comme suit : https://discord.com/channels/{first_guild_id_for_link}/{first_channel_id_for_link}/{first_message_id_for_link}
 N'invente pas de lien si les IDs ne sont pas explicitement disponibles.
-Ne mentionne pas les IDs dans le résumé lui-même, seulement le lien formaté à la fin s'il est applicable. Par exemple: [Lien vers le message](URL_CONSTRUITE)
+Ne mentionne pas les IDs dans le résumé lui-même, seulement le lien formaté à la fin s'il est applicable. Par exemple: Lien vers le message et URL_CONSTRUITE
 
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement environ 300 mots mais tu peux aller sur les 1000-2000 mots pour des requetes avec beaucoup de messages).
 """
@@ -291,8 +291,8 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            temperature=0.3, # Température légèrement baissée pour plus de factualité
-            max_tokens=600, # Un peu plus de marge pour le résumé et le lien
+            temperature=0.3,
+            max_tokens=1500, 
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
