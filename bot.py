@@ -236,7 +236,7 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
 
     # Formater les messages pour les envoyer à l'IA
     # On limite le nombre de messages pour éviter de dépasser la taille du prompt de l'IA
-    MAX_MESSAGES_FOR_SUMMARY = 50 
+    MAX_MESSAGES_FOR_SUMMARY = 150
     formatted_messages = "" # Initialise la chaîne qui contiendra les messages formatés
     paris_tz = pytz.timezone('Europe/Paris')
 
@@ -315,7 +315,7 @@ ttv_yunix ou yunix : Liam
     - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
     - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
     - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
-Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/{channel_id}/{message_id} (ex: https://discord.com/channels/123456789012345678/123456789012345678)
+Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (ex: https://discord.com/channels/123456789012345678/123456789012345678)
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 300 mots).
 """
 
