@@ -259,16 +259,16 @@ Mets en évidence les sujets principaux, les points clés, et les informations i
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
 
 Contexte du groupe d'amis "La bebzerie" (échanges depuis 2022) et correspondances pseudos/prénoms (UTILISE CES INFOS SEULEMENT SI LES PSEUDOS SONT DANS LES MESSAGES FOURNIS):
-Lamerdeoffline/Lamerde: Luka
-hezek112/hezekiel: Enzo
-FlyXOwl/Fly: Théo
-airzya/azyria: Vincent
-wkda_ledauphin/ledauphin: Nathan
-viv1dvivi/vivi/vivihihihi: Victoire (appelle-la Vivi)
-will.connect/will: Justin
-bastos0234/bastos: Bastien
-ttv_yunix/yunix: Liam
-.fantaman/fantaman: Khelyan
+Lamerdeoffline/Lamerde: Luka ( discord id : 292657007779905547)
+hezek112/hezekiel: Enzo ( discord id : 957249973064446032)
+FlyXOwl/Fly: Théo ( discord id : 532526003407290381)
+airzya/azyria: Vincent ( discord id : 503242253272350741)
+wkda_ledauphin/ledauphin: Nathan ( discord id : 728678866654330921)
+viv1dvivi/vivi/vivihihihi: Victoire mais appelle-la Vivi ( discord id : 813047875591340072)
+will.connect/will: Justin ( discord id : 525001001170763797)
+bastos0234/bastos: Bastien ( discord id : 1150107575031963649)
+ttv_yunix/yunix: Liam ( discord id : 735088185771819079)
+.fantaman/fantaman: Khelyan ( discord id : 675351685521997875)
 
 Tu peux tutoyer et utiliser prénoms ou pseudos, mais seulement pour les personnes dont les messages sont effectivement présents dans la liste fournie pour ce résumé.
 
@@ -291,8 +291,8 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            temperature=0.5, # Température légèrement baissée pour plus de factualité
-            max_tokens=450, # Un peu plus de marge pour le résumé et le lien
+            temperature=0.3, # Température légèrement baissée pour plus de factualité
+            max_tokens=600, # Un peu plus de marge pour le résumé et le lien
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
