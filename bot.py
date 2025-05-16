@@ -300,6 +300,8 @@ Chaque message est séparé par une ligne "---".
 Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent.
 Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées.
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
+Voici un résumé de notre situation : 
+ - Nous sommes un groupe d'amis nommé " La bebzerie " qui échangent sur Discord depuis 2022
 Pour les pseudos des utilisateurs donc "author_name" ou "author_display_name", les noms réels des personnes sont : 
 Lamerdeoffline ou Lamerde: Luka
 hezek112 ou hezekiel : Enzo
@@ -315,7 +317,7 @@ ttv_yunix ou yunix : Liam
     - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
     - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
     - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
-Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (ex: https://discord.com/channels/123456789012345678/123456789012345678)
+Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (remplace "channel_id" par l'ID du canal et "id" par l'ID du message).
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 300 mots).
 """
 
