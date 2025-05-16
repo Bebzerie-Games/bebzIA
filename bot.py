@@ -8,6 +8,7 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import traceback # Pour les logs d'erreur détaillés
 import pytz
 import dateutil.parser # Importé pour un parsing de date plus robuste
+import sys # Ajouté pour sys.exit()
 
 print("DEBUG: Script starting...")
 
@@ -19,7 +20,7 @@ COSMOS_DB_KEY = os.getenv("COSMOS_DB_KEY")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 CONTAINER_NAME = os.getenv("CONTAINER_NAME")
 TARGET_CHANNEL_ID_STR = os.getenv("TARGET_CHANNEL_ID")
-LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID") # Gardé au cas où, mais send_bot_log_message ne l'utilise plus
+LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID") 
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
 AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
@@ -119,16 +120,15 @@ Instructions pour la génération de la requête :
             frequency_penalty=0, presence_penalty=0, stop=None
         )
         
-        # --- Log AI-TOKEN-USAGE commenté ---
-        # if response.usage:
-        #     prompt_tokens = response.usage.prompt_tokens
-        #     completion_tokens = response.usage.completion_tokens
-        #     total_tokens = response.usage.total_tokens
-        #     await send_bot_log_message(
-        #         f"Utilisation des tokens (SQL Gen): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nDemandé par: {requesting_user_name_with_id} pour la question: '{user_query}'",
-        #         source="AI-TOKEN-USAGE"
-        #     )
-        # -----------------------------------
+        # Log d'utilisation des tokens (uniquement en console via send_bot_log_message)
+        if response.usage:
+            prompt_tokens = response.usage.prompt_tokens
+            completion_tokens = response.usage.completion_tokens
+            total_tokens = response.usage.total_tokens
+            await send_bot_log_message(
+                f"Utilisation des tokens (SQL Gen): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nDemandé par: {requesting_user_name_with_id} pour la question: '{user_query}'",
+                source="AI-TOKEN-USAGE"
+            )
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             generated_query = response.choices[0].message.content.strip()
@@ -141,7 +141,7 @@ Instructions pour la génération de la requête :
             return generated_query
         else:
             await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
-            return None # Retourner None plutôt que print pour la cohérence
+            return None
     except APIError as e:
         error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
         await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN"); return None
@@ -227,16 +227,15 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
             frequency_penalty=0, presence_penalty=0, stop=None
         )
 
-        # --- Log AI-TOKEN-USAGE commenté ---
-        # if response.usage:
-        #     prompt_tokens = response.usage.prompt_tokens
-        #     completion_tokens = response.usage.completion_tokens
-        #     total_tokens = response.usage.total_tokens
-        #     await send_bot_log_message(
-        #         f"Utilisation des tokens (Synthèse): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nPour {len(messages_to_summarize)} messages. Demandé par: {requesting_user_name_with_id}",
-        #         source="AI-TOKEN-USAGE"
-        #     )
-        # -----------------------------------
+        # Log d'utilisation des tokens (uniquement en console via send_bot_log_message)
+        if response.usage:
+            prompt_tokens = response.usage.prompt_tokens
+            completion_tokens = response.usage.completion_tokens
+            total_tokens = response.usage.total_tokens
+            await send_bot_log_message(
+                f"Utilisation des tokens (Synthèse): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nPour {len(messages_to_summarize)} messages. Demandé par: {requesting_user_name_with_id}",
+                source="AI-TOKEN-USAGE"
+            )
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             summary = response.choices[0].message.content.strip()
@@ -252,7 +251,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
         await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except RateLimitError as e:
         error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
-        if "context_length_exceeded" in str(e): # Spécifique pour ce type d'erreur
+        if "context_length_exceeded" in str(e): 
             await send_bot_log_message(f"Erreur de limite de taux (Synthèse) - Dépassement de la longueur du contexte: {e}. Demandé par: {requesting_user_name_with_id}", source="AI-SUMMARY")
         else:
             await send_bot_log_message(error_message, source="AI-SUMMARY")
@@ -272,7 +271,7 @@ TARGET_CHANNEL_ID, LOG_CHANNEL_ID_VAR, ALLOWED_USER_IDS_LIST = None, None, []
 
 try:
     if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
-    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID_VAR = int(LOG_CHANNEL_ID_STR) # Garder pour before_scheduled_fetch
+    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID_VAR = int(LOG_CHANNEL_ID_STR) 
     
     if ALLOWED_USER_IDS_STR:
         for user_id_str in ALLOWED_USER_IDS_STR.split(','):
@@ -343,7 +342,7 @@ async def main_message_fetch_logic():
     except Exception as e:
         await send_bot_log_message(f"AVERTISSEMENT: Récup MAX timestamp échouée: {e}. Utilisation période défaut.", source=log_source)
     
-    if not after_date: # Si pas de résultat ou erreur
+    if not after_date: 
         after_date = discord.utils.utcnow() - datetime.timedelta(days=14)
         await send_bot_log_message(f"Récupération depuis {after_date.isoformat()} (défaut).", source=log_source)
     else:
@@ -356,8 +355,8 @@ async def main_message_fetch_logic():
             message_json = format_message_to_json(message)
             try: container_client.upsert_item(body=message_json)
             except Exception as e_upsert:
-                 await send_bot_log_message(f"ERREUR upsert msg {message_json['id']}: {e_upsert}", source=log_source) # Simplifié
-            if fetched_in_pass % 500 == 0:
+                 await send_bot_log_message(f"ERREUR upsert msg {message_json['id']}: {e_upsert}", source=log_source) 
+            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0: # Modifié pour éviter le log à chaque message
                 await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités...", source=log_source)
         await send_bot_log_message(f"Récupération terminée pour '{channel_to_fetch.name}'. {fetched_in_pass} messages traités.", source=log_source)
     except Exception as e:
@@ -376,7 +375,7 @@ async def before_scheduled_fetch():
     valid_config = True
     if not TARGET_CHANNEL_ID: await send_bot_log_message("ERREUR: TARGET_CHANNEL_ID non configuré.", source="SCHEDULER"); valid_config = False
     if not container_client: await send_bot_log_message("ERREUR: Conteneur Cosmos DB non initialisé.", source="SCHEDULER"); valid_config = False
-    if not LOG_CHANNEL_ID_VAR: print("AVERTISSEMENT SCHEDULER: LOG_CHANNEL_ID non configuré (pour les messages stdout de cette tâche).") # Note: send_bot_log_message va en console maintenant
+    if not LOG_CHANNEL_ID_VAR: print("AVERTISSEMENT SCHEDULER: LOG_CHANNEL_ID non configuré (pour les messages stdout de cette tâche).") 
     
     if not valid_config: scheduled_message_fetch.cancel(); await send_bot_log_message("Tâche récupération annulée.", source="SCHEDULER")
     else: print("Tâche récupération planifiée: Vérifications OK.")
@@ -393,11 +392,10 @@ async def ping(ctx): await ctx.send(f'Pong! Latence: {round(bot.latency * 1000)}
 
 @bot.command(name='ask', help="Pose une question sur l'historique des messages.")
 async def ask_command(ctx, *, question: str):
-    log_source = "ASK-CMD" # Utilisé pour les logs console restants
+    log_source = "ASK-CMD" 
     user_name_for_log = f"{ctx.author.name} (ID: {ctx.author.id})"
     
     if ALLOWED_USER_IDS_LIST and ctx.author.id not in ALLOWED_USER_IDS_LIST:
-        # Log en console uniquement
         await send_bot_log_message(f"Accès refusé à !ask pour {user_name_for_log}. Question: '{question}'", source=log_source)
         await ctx.send("Désolé, cette commande est actuellement restreinte."); return
     
@@ -415,9 +413,8 @@ async def ask_command(ctx, *, question: str):
     if not generated_sql_query: await ctx.send("Je n'ai pas réussi à interpréter votre question."); return
     if generated_sql_query == "NO_QUERY_POSSIBLE": await ctx.send("Je ne peux pas formuler de requête. Essayez de reformuler."); return
     if generated_sql_query == "INVALID_QUERY_FORMAT": await ctx.send("L'IA a retourné une réponse inattendue."); return
-
-    # --- Tous les logs spécifiques à la requête SQL ou au résumé sont commentés/supprimés pour l'envoi Discord ---
-    # await send_bot_log_message(f"Génération SQL pour '{question}' par {user_name_for_log} terminée. Requête : {generated_sql_query}", source="ASK-CMD-SQL-READY")
+    
+    await send_bot_log_message(f"Génération SQL pour '{question}' par {user_name_for_log} terminée. Requête : {generated_sql_query}", source="ASK-CMD-SQL-READY")
 
     try:
         items = list(container_client.query_items(query=generated_sql_query, enable_cross_partition_query=True))
@@ -435,17 +432,44 @@ async def ask_command(ctx, *, question: str):
         ai_summary = await get_ai_summary(items, user_name_for_log) 
 
         if ai_summary:
-            embed = discord.Embed(title=f"Résumé des messages trouvés ({len(items)} messages)",
-                                description=ai_summary, color=discord.Color.blue(), 
-                                timestamp=discord.utils.utcnow())
+            MAX_EMBED_DESC_LENGTH = 4000 
+            MAX_FALLBACK_MSG_LENGTH = 1900 
+
+            truncated_summary_for_embed = ai_summary
+            if len(ai_summary) > MAX_EMBED_DESC_LENGTH:
+                truncated_summary_for_embed = ai_summary[:MAX_EMBED_DESC_LENGTH - 25] + "\n... (Résumé tronqué)" # -25 pour marge
+                await send_bot_log_message(f"Résumé IA tronqué pour l'embed (original: {len(ai_summary)}, tronqué: {len(truncated_summary_for_embed)}). Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
+
+            embed = discord.Embed(
+                title=f"Résumé des messages trouvés ({len(items)} messages)",
+                description=truncated_summary_for_embed, 
+                color=discord.Color.blue(), 
+                timestamp=discord.utils.utcnow()
+            )
             embed.set_footer(text=f"Requête : \"{question}\"")
-            try: await ctx.send(embed=embed)
-            except discord.Forbidden: await ctx.send(f"**Résumé ({len(items)} msgs):**\n{ai_summary}\n*(Pas de perm Embed)*")
-            except Exception as e_embed:
-                 await ctx.send(f"**Résumé ({len(items)} msgs):**\n{ai_summary}\n*(Erreur Embed: {e_embed})*")
-                 await send_bot_log_message(f"Erreur Embed: {e_embed}\n{traceback.format_exc()}", source=log_source) # Log console
             
-            # Log console uniquement pour le succès de la synthèse
+            try:
+                await ctx.send(embed=embed)
+            except discord.HTTPException as e_embed_send: 
+                await send_bot_log_message(f"Erreur lors de l'envoi de l'embed (sera tenté en message normal): {e_embed_send}. Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
+                
+                fallback_message_header = f"**Résumé ({len(items)} msgs):**\n"
+                # Note: e_embed_send peut être long, donc on utilise un message d'erreur générique
+                fallback_message_footer = f"\n*(Le résumé était trop long pour un embed. Version texte ci-dessus.)*" 
+                
+                remaining_space_for_summary = MAX_FALLBACK_MSG_LENGTH - len(fallback_message_header) - len(fallback_message_footer)
+                
+                truncated_summary_for_fallback = ai_summary
+                if len(ai_summary) > remaining_space_for_summary:
+                    truncated_summary_for_fallback = ai_summary[:remaining_space_for_summary - 25] + "\n... (Résumé tronqué)" # -25 pour marge
+                    await send_bot_log_message(f"Résumé IA tronqué pour le message de fallback (original: {len(ai_summary)}, tronqué: {len(truncated_summary_for_fallback)}). Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
+
+                try:
+                    await ctx.send(f"{fallback_message_header}{truncated_summary_for_fallback}{fallback_message_footer}")
+                except discord.HTTPException as e_fallback_send:
+                    await send_bot_log_message(f"Erreur lors de l'envoi du message de fallback: {e_fallback_send}. Demandé par {user_name_for_log} Q: '{question}'. Le résumé était trop long.", source=log_source)
+                    await ctx.send("Désolé, le résumé généré est trop long pour être affiché, même après avoir essayé de le raccourcir.")
+            
             log_msg_succ = (f"Synthèse réussie pour {len(items)} messages. Demandé par: {user_name_for_log} Q: '{question}'. "
                             f"Résumé basé sur {min(len(items), MAX_MESSAGES_FOR_SUMMARY_CONFIG)} premiers.")
             await send_bot_log_message(log_msg_succ, source=log_source)
