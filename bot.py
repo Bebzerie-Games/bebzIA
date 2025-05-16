@@ -93,7 +93,7 @@ async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | N
     """
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client: # Vérification du client aussi
         print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
-        await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY")
+        await send_bot_log_message("Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué.", source="AI-QUERY-SQL-GEN")
         return None
 
     # Construction du system_prompt pour la génération SQL (comme précédemment)
@@ -236,48 +236,70 @@ async def get_ai_summary(messages_list: list[dict]) -> str | None:
     formatted_messages = "" # Initialise la chaîne qui contiendra les messages formatés
     paris_tz = pytz.timezone('Europe/Paris')
 
-    # Limiter aux N messages les plus récents (premiers de la liste triée par DESC)
+    # Limiter aux N messages les plus récents (premiers de la liste triée par DESC par défaut)
     messages_to_summarize = messages_list[:MAX_MESSAGES_FOR_SUMMARY]
 
     # Formater chaque message - ASSURE-TOI QUE LES LIGNES CI-DESSOUS SONT BIEN INDENTÉES
     for item in messages_to_summarize:
         # Les lignes à l'intérieur de cette boucle FOR doivent être indentées d'un niveau supplémentaire
         author = item.get("author_name", "Auteur inconnu")
+        # Utilise author_display_name pour le résumé si disponible, sinon author_name
+        if item.get("author_display_name"):
+             author = item.get("author_display_name")
+
         timestamp_str = item.get("timestamp_iso")
         content = item.get("content", "")
 
-        date_fmt = "Date inconnue"
+        date_fmt = "Date inconnue" # Default fallback
+        dt_obj = None # Initialize dt_obj
+
         if timestamp_str:
-            try:
-                # Utiliser dateutil.parser.isoparse pour plus de flexibilité
-                dt_obj = dateutil.parser.isoparse(timestamp_str)
-
-                if dt_obj.tzinfo is None:
-                    dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
-
-                dt_paris = dt_obj.astimezone(paris_tz)
-                date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
-            except Exception:
-                # En cas d'échec de parsing, utiliser une date de secours et logguer l'erreur
-                 pass # Logguer si nécessaire dans les logs Heroku, mais ne pas bloquer le résumé
+             try:
+                 # Try fromisoformat first
+                 dt_obj = datetime.datetime.fromisoformat(timestamp_str)
+             except ValueError:
+                 # Fallback to dateutil if fromisoformat fails
+                 try:
+                     dt_obj = dateutil.parser.isoparse(timestamp_str)
+                 except Exception as e_parse:
+                      # Log parsing error, dt_obj remains None
+                      print(f"Erreur parsing date (pour résumé) avec fromisoformat/dateutil pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
 
 
-        # Cette ligne était probablement la cause de l'erreur "Expected indented block" car pas assez indentée
+             if dt_obj: # If parsing was successful
+                 try:
+                     # Ensure timezone-aware, assume UTC if naive
+                     if dt_obj.tzinfo is None:
+                         dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
+
+                     # Convert to Paris time
+                     dt_paris = dt_obj.astimezone(paris_tz)
+                     # Format date for AI input (ISO format is good for consistency)
+                     date_fmt = dt_paris.strftime("%Y-%m-%d %H:%M") # Format plus IA-friendly
+
+                 except Exception as e_tz_format:
+                     # Log errors during timezone conversion/formatting
+                      print(f"Erreur conversion/formatage timezone (pour résumé) pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
+                     # date_fmt remains "Date inconnue"
+
+
+        # Format each message for the AI prompt
+        # Inclure la date formatée pour aider l'IA à situer chronologiquement
         formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
 
-    # Le prompt pour l'IA pour la synthèse (Le reste de la fonction, pas besoin de le modifier si ce n'est pas le problème d'indentation)
+
+    # Le prompt pour l'IA pour la synthèse
     system_prompt = """
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
-Tu recevras une liste de messages Discord dans l'ordre chronologique (du plus récent au plus ancien, ou inversement, selon comment ils sont fournis).
-Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion.
-Mets en évidence les sujets principaux, les points clés et, si pertinent, les opinions ou informations importantes partagées.
-Le résumé doit être un texte fluide, pas une liste de points.
-Ne cite pas les messages textuellement, sauf si une citation est absolument nécessaire pour le contexte.
-Le résumé doit être en français.
-Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 200 mots).
+Tu recevras une liste de messages Discord dans un format [NomAuteur] (AAAA-MM-JJ HH:MM): Contenu du message.
+Chaque message est séparé par une ligne "---".
+Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent.
+Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées.
+Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
+Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 250 mots).
 """
 
-    user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n---\n\nRésumé de la discussion :"
+    user_message = f"Voici les messages à résumer :\n\n---\n{formatted_messages}\n\nRésumé de la discussion :"
 
     try:
         # Appel à l'API Azure OpenAI pour obtenir le résumé
@@ -288,7 +310,7 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
                 {"role": "user", "content": user_message}
             ],
             temperature=0.7, # Une température un peu plus élevée pour un résumé plus fluide
-            max_tokens=300, # Plus de tokens pour le résumé que pour la requête SQL
+            max_tokens=400, # Plus de tokens pour le résumé
             top_p=0.95,
             frequency_penalty=0,
             presence_penalty=0,
@@ -333,12 +355,17 @@ print("DEBUG: Initializing Discord Intents and Bot...") # AJOUT DEBUG
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
-intents.guilds = True
+intents.guilds = True # Nécessaire pour bot.get_channel et gestion des membres/rôles/pseudos
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 print("DEBUG: Discord Bot object created.") # AJOUT DEBUG
 
 # --- Conversion des IDs de canaux ---
 print("DEBUG: Converting IDs...") # AJOUT DEBUG
+TARGET_CHANNEL_ID = None
+LOG_CHANNEL_ID = None
+ALLOWED_USER_ID = None
+
 try:
     if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
     if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
@@ -346,7 +373,11 @@ try:
     if ALLOWED_USER_ID_STR: ALLOWED_USER_ID = int(ALLOWED_USER_ID_STR)
     # ---------------------------------------
 except ValueError:
-    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide.")
+    # Cette erreur est critique car les IDs sont essentiels
+    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide. Vérifiez vos variables d'environnement.")
+    # Quitter proprement si les IDs ne peuvent pas être convertis
+    import sys
+    sys.exit(1)
 print("DEBUG: ID conversion complete.") # AJOUT DEBUG
 
 # --- Initialisation du client Cosmos DB ---
@@ -356,20 +387,23 @@ container_client = None
 if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
     try:
         cosmos_client_instance_global = CosmosClient(COSMOS_DB_ENDPOINT, credential=COSMOS_DB_KEY)
-        database_client = cosmos_client_instance_global.create_database_if_not_exists(id=DATABASE_NAME)
-        partition_key_path = PartitionKey(path="/id")
-        container_client = database_client.create_container_if_not_exists(
-            id=CONTAINER_NAME,
-            partition_key=partition_key_path,
-            offer_throughput=400
-        )
+        # Utiliser get_database_client pour ne pas tenter de créer si déjà là et éviter des permissions limitées
+        database_client = cosmos_client_instance_global.get_database_client(id=DATABASE_NAME) 
+        
+        # Tenter de se connecter au conteneur existant
+        container_client = database_client.get_container_client(id=CONTAINER_NAME)
+        
         print("Connecté à Cosmos DB avec succès.")
+    except exceptions.CosmosResourceNotFoundError:
+        print(f"ERREUR CRITIQUE: Base de données ou conteneur Cosmos DB introuvable. Assurez-vous qu'ils existent: {DATABASE_NAME}/{CONTAINER_NAME}")
+        container_client = None # S'assurer qu'il est None si non trouvé
     except Exception as e:
         print(f"ERREUR CRITIQUE lors de l'initialisation de Cosmos DB: {e}\n{traceback.format_exc()}")
         container_client = None
 else:
-    print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages sera désactivée.")
+    print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages et les recherches seront désactivées.")
 print("DEBUG: Cosmos DB init complete.") # AJOUT DEBUG
+
 
 # --- Fonctions utilitaires ---
 def format_message_to_json(message: discord.Message):
@@ -379,10 +413,11 @@ def format_message_to_json(message: discord.Message):
         "channel_id": str(message.channel.id),
         "guild_id": str(message.guild.id) if message.guild else None,
         "author_id": str(message.author.id),
-        "author_name": message.author.name,
-        "author_discriminator": message.author.discriminator,
-        # Utilise message.author.display_name pour le nom d'affichage (pseudo ou nom d'utilisateur)
-        "author_display_name": message.author.display_name, 
+        # Utilise author_name qui est le nom d'utilisateur unique (ex: flyxowl)
+        "author_name": message.author.name, 
+        "author_discriminator": message.author.discriminator, # Discriminator est souvent '0000' maintenant
+        # Utilise display_name qui est le pseudo du serveur, ou à défaut le nom d'utilisateur
+        "author_display_name": message.author.display_name,
         "author_bot": message.author.bot,
         "content": message.content,
         "timestamp_iso": message.created_at.isoformat() + "Z",
@@ -411,9 +446,13 @@ async def main_message_fetch_logic():
 
     # --- Tenter de récupérer l'objet canal ---
     try:
+        # Utilise get_channel en premier (cache)
         channel_to_fetch = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel_to_fetch:
+            # Si non trouvé en cache, fetch via API
             await send_bot_log_message(f"Canal {TARGET_CHANNEL_ID} non trouvé en cache, tentative de fetch via API.", source=log_source)
+            # S'assurer que le bot est prêt avant de fetch
+            await bot.wait_until_ready() # Attendre que le cache soit potentiellement rempli
             channel_to_fetch = await bot.fetch_channel(TARGET_CHANNEL_ID)
 
         # Vérifier si l'objet canal a été obtenu avec succès
@@ -448,6 +487,8 @@ async def main_message_fetch_logic():
         # Logique normale : reprendre après le dernier message stocké en base.
         last_message_timestamp_unix = 0
         try:
+            # Assurer que le bot est prêt avant de faire la requête MAX
+            await bot.wait_until_ready() 
             query = f"SELECT VALUE MAX(c.timestamp_unix) FROM c WHERE c.channel_id = '{str(TARGET_CHANNEL_ID)}'"
             results = list(container_client.query_items(query=query, enable_cross_partition_query=True))
             if results and results[0] is not None:
@@ -466,31 +507,40 @@ async def main_message_fetch_logic():
     # --- Fin de la configuration de la date de départ ---
 
     # --- Début de la boucle de fetch Discord ---
+    # La méthode history va chercher les messages APRÈS `after_date`, en commençant par les plus anciens si oldest_first=True
     await send_bot_log_message(f"Lancement de channel_to_fetch.history(after={after_date.isoformat()}, oldest_first=True, limit=None)..", source=log_source)
 
     fetched_in_pass = 0
 
-    async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
-        fetched_in_pass +=1
-        message_json = format_message_to_json(message)
-        item_id = message_json["id"]
+    try:
+        # Utilise une limite pour le fetch total pour éviter de bloquer indéfiniment sur un très grand historique
+        # Ou s'assurer que le "limit=None" de history est bien géré par discord.py avec pagination
+        # Pour l'instant, on garde limit=None pour tenter de tout avoir depuis after_date
+        async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
+            fetched_in_pass +=1
+            message_json = format_message_to_json(message)
+            item_id = message_json["id"]
 
-        # --- Logique de récupération et stockage avec upsert_item ---
-        try:
-            container_client.upsert_item(body=message_json)
-        except exceptions.CosmosHttpResponseError as e_upsert:
-             await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
-        except Exception as e:
-             await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
+            # --- Logique de récupération et stockage avec upsert_item ---
+            try:
+                container_client.upsert_item(body=message_json)
+            except exceptions.CosmosHttpResponseError as e_upsert:
+                 await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
+            except Exception as e:
+                 await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
 
-        
-        if fetched_in_pass > 0 and fetched_in_pass % 500 == 0:
-            await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
+            
+            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0:
+                await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
 
-    # --- Résumé de la tâche ---
-    summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
-                        f"- Messages traités/mis à jour : {fetched_in_pass}")
-    await send_bot_log_message(summary_message, source=log_source)
+        # --- Résumé de la tâche ---
+        summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
+                            f"- Messages traités/mis à jour : {fetched_in_pass}")
+        await send_bot_log_message(summary_message, source=log_source)
+
+    except Exception as e: # Capturer les exceptions pendant la boucle de fetch history
+        error_details = traceback.format_exc()
+        await send_bot_log_message(f"ERREUR MAJEURE pendant boucle fetch history:\n{error_details}", source=log_source)
 
 
 # --- Définition de la tâche en boucle ---
@@ -509,23 +559,37 @@ async def scheduled_message_fetch():
 @scheduled_message_fetch.before_loop
 async def before_scheduled_fetch():
     log_source = "SCHEDULER"
-    await bot.wait_until_ready()
+    # S'assurer que le bot est prêt avant de démarrer la boucle
+    await bot.wait_until_ready() 
     print("Bot prêt, la tâche de récupération planifiée peut commencer.")
     valid_config = True
     if not TARGET_CHANNEL_ID:
         print("ERREUR CRITIQUE: TARGET_CHANNEL_ID non configuré. Tâche annulée.")
         await send_bot_log_message("ERREUR CRITIQUE: TARGET_CHANNEL_ID non configuré. Tâche désactivée.", source=log_source)
         valid_config = False
+        # Utiliser bot.loop.create_task(scheduled_message_fetch.cancel()) si on est dans un contexte async
+        # Ici, on est dans before_loop, un simple cancel() devrait suffire si valid_config est False
+        if not valid_config:
+            scheduled_message_fetch.cancel()
+            await send_bot_log_message("Tâche récupération annulée (config invalide).", source=log_source)
+            return # Sortir de la fonction si la config est invalide
+            
     if not LOG_CHANNEL_ID:
         print("AVERTISSEMENT: LOG_CHANNEL_ID non configuré. Logs sur STDOUT.")
+    
+    # La vérification de container_client est cruciale aussi
     if not container_client:
-        print("ERREUR CRITIQUE: Client Cosmos DB non initialisé. Tâche annulée.")
-        await send_bot_log_message("ERREUR CRITIQUE: Cosmos DB non initialisé. Tâche désactivée.", source=log_source)
-        valid_config = False
-        
-    if not valid_config:
-        scheduled_message_fetch.cancel()
-        await send_bot_log_message("Tâche récupération annulée (config invalide).", source=log_source)
+         print("ERREUR CRITIQUE: Client Cosmos DB non initialisé. Tâche annulée.")
+         await send_bot_log_message("ERREUR CRITIQUE: Cosmos DB non initialisé. Tâche désactivée.", source=log_source)
+         valid_config = False
+         # Annuler et sortir si Cosmos DB n'est pas prêt
+         if not valid_config:
+             scheduled_message_fetch.cancel()
+             await send_bot_log_message("Tâche récupération annulée (Cosmos DB invalide).", source=log_source)
+             return # Sortir
+
+    # Si toutes les vérifications passent, la tâche peut démarrer
+    print("Tâche de récupération planifiée : Vérifications initiales passées.") # Log de succès des vérifications initiales
 
 # --- Événements du Bot ---
 @bot.event
@@ -535,42 +599,34 @@ async def on_ready():
     print(f"ID du bot : {bot.user.id}")
     await send_bot_log_message(f"Bot {bot.user.name} connecté et prêt.", source=log_source)
     
-    # Démarrer la tâche planifiée APRES les vérifications initiales
-    if TARGET_CHANNEL_ID and container_client: # LOG_CHANNEL_ID est optionnel pour démarrer la tâche
-        print("Configuration validée. Démarrage de la tâche de récupération...")
-        # Vérifie si la tâche n'est pas déjà en cours d'exécution avant de la démarrer
-        if not scheduled_message_fetch.is_running():
-             scheduled_message_fetch.start()
-             await send_bot_log_message("Tâche de récupération planifiée démarrée.", source="SCHEDULER")
-        else:
-             print("Tâche de récupération déjà en cours d'exécution.")
-             await send_bot_log_message("Tâche de récupération déjà en cours d'exécution.", source="SCHEDULER")
+    # Démarrer la tâche planifiée APRES les vérifications initiales (qui se font dans before_loop)
+    # on_ready est le bon endroit pour initier le DÉMARRAGE si before_loop n'annule pas
+    # La logique de before_loop gère déjà les conditions d'annulation.
+    # Si on_ready est atteint et before_loop n'a pas annulé, c'est que les conditions de base sont OK.
+    # On peut donc démarrer la tâche ici.
+    print("on_ready atteint. Tentative de démarrage de la tâche de récupération si elle ne tourne pas déjà...")
+    if not scheduled_message_fetch.is_running():
+         # L'appel à .start() appelle lui-même before_loop avant la première exécution
+         scheduled_message_fetch.start() 
+         await send_bot_log_message("Tâche de récupération planifiée initiée via on_ready.", source="SCHEDULER")
     else:
-        missing_configs = []
-        if not TARGET_CHANNEL_ID: missing_configs.append("TARGET_CHANNEL_ID")
-        if not container_client: missing_configs.append("Connexion Cosmos DB")
-        
-        if missing_configs:
-            msg = f"Tâche récupération NON démarrée. Manquant: {', '.join(missing_configs)}."
-            print(f"AVERTISSEMENT CRITIQUE: {msg}")
-            await send_bot_log_message(f"AVERTISSEMENT CRITIQUE: {msg}", source=log_source)
-        else:
-            # Ce cas ne devrait pas être atteint car la condition au-dessus gère le démarrage.
-            # Mais par sécurité, si on arrive ici sans missing_configs, on logue.
-            print("AVERTISSEMENT: Logique inattendue dans on_ready, vérifiez les conditions de démarrage de la tâche.")
-            await send_bot_log_message("AVERTISSEMENT: Logique inattendue dans on_ready.", source=log_source)
-
+         print("Tâche de récupération déjà en cours d'exécution (probablement relancée par Heroku).")
+         await send_bot_log_message("Tâche de récupération déjà en cours (relance Heroku?).", source="SCHEDULER")
 
 # --- Commandes du Bot ---
+# Les décorateurs @bot.command() enregistrent les commandes auprès de l'objet bot
 @bot.command(name='ping')
 async def ping(ctx):
+    # print(f"DEBUG: Commande !ping reçue de {ctx.author.name}") # Optionnel: debug
     await ctx.send(f'Pong! Latence: {round(bot.latency * 1000)}ms')
 
 @bot.command(name='ask', help="Pose une question sur l'historique des messages. L'IA tentera de trouver les messages pertinents.")
 async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD"
+    # print(f"DEBUG: Commande !ask reçue de {ctx.author.name} avec question: '{question}'") # Optionnel: debug
 
     # --- Nouvelle vérification de l'utilisateur ---
+    # Vérifie si ALLOWED_USER_ID est défini ET si l'ID de l'auteur n'est PAS l'ID autorisé
     if ALLOWED_USER_ID is not None and ctx.author.id != ALLOWED_USER_ID:
         # print(f"Tentative d'utiliser !ask par utilisateur non autorisé: {ctx.author.name} (ID: {ctx.author.id})") # Moins de logs direct sur Heroku pour ça
         await ctx.send("Désolé, cette commande est actuellement restreinte.")
@@ -581,11 +637,13 @@ async def ask_command(ctx, *, question: str):
     await ctx.send(f"Recherche en cours pour : \"{question}\" ... Veuillez patienter.")
 
     # --- Déplacer les vérifications AVANT l'appel à l'IA ou la base de données ---
+    # Vérifie si l'IA est configurée et le client est prêt
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
-        await ctx.send("Désolé, le module d'intelligence artificielle n'est pas correctement configuré.")
+        await ctx.send("Désolé, le module d'intelligence artificielle n'est pas correctement configuré ou démarré.")
         await send_bot_log_message(f"Cmd !ask par {ctx.author.name} échouée : Azure OpenAI non configuré/client non prêt.", source=log_source)
         return
 
+    # Vérifie si la connexion à la base de données est active
     if not container_client:
         await ctx.send("Désolé, la connexion à la base de données n'est pas active.")
         await send_bot_log_message(f"Cmd !ask par {ctx.author.name} échouée : Client Cosmos DB non initialisé.", source=log_source)
@@ -595,6 +653,7 @@ async def ask_command(ctx, *, question: str):
     # --- Étape 1 : Générer la requête SQL avec l'IA ---
     generated_sql_query = await get_ai_analysis(question, ctx.author.name) 
     
+    # Gérer les cas où l'IA n'a pas pu générer de requête ou a retourné un format invalide
     if not generated_sql_query:
         await ctx.send("Je n'ai pas réussi à interpréter votre question (erreur interne/communication IA).")
         # get_ai_analysis a déjà loggué l'erreur spécifique
@@ -611,13 +670,15 @@ async def ask_command(ctx, *, question: str):
     # Log la requête générée (utile pour le debug, n'est pas envoyé à l'utilisateur)
     await send_bot_log_message(f"Cmd !ask par {ctx.author.name} pour '{question}'. Requête IA : {generated_sql_query}", source=log_source)
     
-    # --- Commente ou supprime les messages de debug envoyés à l'utilisateur ---
+    # --- Commente ou supprime les messages de debug envoyés à l'utilisateur (Requête générée) ---
     # if len(generated_sql_query) < 1900 : # Pour éviter un message de debug trop long
     #     await ctx.send(f"Requête générée (débogage) : ```sql\n{generated_sql_query}\n```")
     # --------------------------------------------------------------------
 
     # --- Étape 2 : Exécuter la requête sur Cosmos DB ---
     try:
+        # Vérifie si le bot est prêt avant de faire la requête BD
+        await bot.wait_until_ready()
         query_to_execute = generated_sql_query
         items = list(container_client.query_items(
             query=query_to_execute,
@@ -637,90 +698,59 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}", source=log_source)
             return
 
-        # Si la requête a retourné des messages (pas un COUNT), générer un résumé
-        await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") # Informe l'utilisateur du nombre de messages trouvés
+        # Si la requête a retourné des messages (pas un COUNT), informer l'utilisateur et générer un résumé
+        await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") 
 
         # --- Étape 4 : Générer le résumé avec l'IA ---
         ai_summary = await get_ai_summary(items)
 
-        # --- Étape 5 : Afficher le résumé ou les messages en cas d'échec de synthèse ---
+        # --- Étape 5 : Afficher le résumé ou un message de secours ---
         if ai_summary:
             # Affiche le résumé retourné par l'IA
-            await ctx.send(f"**Résumé des messages trouvés ({len(items)} messages) :**\n{ai_summary}")
-            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages.", source=log_source)
+            # Utilise une Embed pour une meilleure présentation
+            embed = discord.Embed(
+                title=f"Résumé des messages trouvés ({len(items)} messages)",
+                description=ai_summary,
+                color=discord.Color.blue(), # Choisis une couleur
+                timestamp=discord.utils.utcnow() # Ajoute un timestamp
+            )
+            embed.set_footer(text=f"Requête : \"{question}\"") # Ajoute la requête en footer
+
+            # Vérifie si l'affichage Embed est possible dans le canal, sinon utilise un message texte simple
+            try:
+                await ctx.send(embed=embed)
+            except discord.Forbidden:
+                 await ctx.send(f"**Résumé des messages trouvés ({len(items)} messages) :**\n{ai_summary}\n*(Impossible d'envoyer une Embed dans ce canal)*")
+            except Exception as e_embed:
+                 await ctx.send(f"**Résumé des messages trouvés ({len(items)} messages) :**\n{ai_summary}\n*(Erreur lors de l'envoi de l'Embed : {e_embed})*")
+                 print(f"Erreur lors de l'envoi de l'Embed: {e_embed}\n{traceback.format_exc()}")
+
+
+            await send_bot_log_message(f"Synthèse réussie pour {len(items)} messages. Résultat envoyé.", source=log_source)
         else:
-            # Si la synthèse a échoué, on peut soit l'indiquer, soit afficher les premiers messages en secours
+            # Si la synthèse a échoué
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
-            # Optionnel: Afficher les premiers messages en secours si la synthèse échoue
-            # print("DEBUG: Affichage des premiers messages en secours suite à l'échec de synthèse.")
-            # response_parts = [f"Voici les {min(len(items), 5)} premiers messages trouvés (synthèse échouée) :\n"]
-            # max_messages_to_display = 5
-            # messages_displayed_count = 0
-            # # Copier/coller la boucle d'affichage précédente si tu veux ce fallback
-            # # ... (code de la boucle d'affichage des 5 premiers messages) ...
-            # # Ensuite, envoyer les parties du message
-            # # ... (code d'envoi des current_message) ...
+            # Optionnel: Afficher les premiers messages en secours si la synthèse échoue (réactive le code précédent si tu veux ça)
             await send_bot_log_message(f"Synthèse échouée pour {len(items)} messages.", source=log_source)
 
 
     except exceptions.CosmosHttpResponseError as e:
         error_msg_user = "Une erreur s'est produite lors de la recherche dans la base de données."
+        # Gérer les erreurs spécifiques de Cosmos DB (requête trop complexe/gourmande)
         if "Query exceeded memory limit" in str(e) or "Query exceeded maximum time limit" in str(e):
             error_msg_user = "Votre demande a généré une requête trop complexe/gourmande. Soyez plus spécifique (ex: période plus courte)."
+        elif "Request rate is large" in str(e):
+             error_msg_user = "La base de données est temporairement surchargée. Veuillez réessayer plus tard."
         
         await ctx.send(error_msg_user)
         await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\n{traceback.format_exc()}", source=log_source)
         print(f"Erreur Cosmos DB: {e}")
     except Exception as e:
+        # Gérer toute autre exception inattendue pendant l'exécution de la requête ou la synthèse
         await ctx.send("Une erreur inattendue s'est produite lors de l'exécution de la requête ou de la synthèse.")
         await send_bot_log_message(f"Erreur inattendue dans ask_command (exécution/synthèse) pour '{generated_sql_query}': {e}\n{traceback.format_exc()}", source=log_source)
         print(f"Erreur inattendue: {e}")
 
-
-print("DEBUG: AI functions defined.") # AJOUT DEBUG
-
-# --- Configuration des Intents et du Bot ---
-print("DEBUG: Initializing Discord Intents and Bot...") # AJOUT DEBUG
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-intents.guilds = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-print("DEBUG: Discord Bot object created.") # AJOUT DEBUG
-
-# --- Conversion des IDs de canaux ---
-print("DEBUG: Converting IDs...") # AJOUT DEBUG
-try:
-    if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
-    if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
-    # --- Conversion du nouvel ID utilisateur ---
-    if ALLOWED_USER_ID_STR: ALLOWED_USER_ID = int(ALLOWED_USER_ID_STR)
-    # ---------------------------------------
-except ValueError:
-    print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide.")
-print("DEBUG: ID conversion complete.") # AJOUT DEBUG
-
-# --- Initialisation du client Cosmos DB ---
-print("DEBUG: Initializing Cosmos DB...") # AJOUT DEBUG
-cosmos_client_instance_global = None
-container_client = None
-if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
-    try:
-        cosmos_client_instance_global = CosmosClient(COSMOS_DB_ENDPOINT, credential=COSMOS_DB_KEY)
-        database_client = cosmos_client_instance_global.create_database_if_not_exists(id=DATABASE_NAME)
-        partition_key_path = PartitionKey(path="/id")
-        container_client = database_client.create_container_if_not_exists(
-            id=CONTAINER_NAME,
-            partition_key=partition_key_path,
-            offer_throughput=400
-        )
-        print("Connecté à Cosmos DB avec succès.")
-    except Exception as e:
-        print(f"ERREUR CRITIQUE lors de l'initialisation de Cosmos DB: {e}\n{traceback.format_exc()}")
-        container_client = None
-else:
-    print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages sera désactivée.")
-print("DEBUG: Cosmos DB init complete.") # AJOUT DEBUG
 
 # --- Démarrage du Bot ---
 print("DEBUG: Reaching main execution block.") # AJOUT DEBUG
@@ -729,9 +759,17 @@ if __name__ == "__main__":
     if DISCORD_BOT_TOKEN:
         print("DEBUG: Tentative de démarrer le bot...")
         try:
+            # La méthode run() est bloquante et maintient le bot en marche
             bot.run(DISCORD_BOT_TOKEN)
-            print("DEBUG: bot.run() terminé. (Ce message ne devrait PAS s'afficher pour un bot en marche continue)")
+            print("DEBUG: bot.run() terminé. (Ce message ne devrait PAS s'afficher pour un bot en marche continue)") # Si ce message apparaît, le bot s'est arrêté prématurément
         except Exception as e:
+            # Log les exceptions qui pourraient empêcher bot.run() de démarrer ou le faire planter
             print(f"ERREUR: Exception lors de bot.run(): {e}\n{traceback.format_exc()}")
+            # Quitter le processus si bot.run() échoue de manière inattendue
+            import sys
+            sys.exit(1) # Quitter avec un statut d'erreur
     else:
-        print("ERREUR: DISCORD_BOT_TOKEN non trouvé. Le bot ne peut pas démarrer.")
+        print("ERREUR: DISCORD_BOT_TOKEN non trouvé. Le bot ne peut pas démarrer. Vérifiez vos variables d'environnement Heroku.")
+        # Quitter si le token n'est pas trouvé
+        import sys
+        sys.exit(1) # Quitter avec un statut d'erreur
