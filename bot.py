@@ -55,14 +55,11 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
     paris_tz = pytz.timezone('Europe/Paris')
     now_paris = now_utc.astimezone(paris_tz)
     
-    # --- MODIFICATION: Formatter l'heure UTC et l'heure de Paris pour les logs ---
     timestamp_paris_display = now_paris.strftime('%Y-%m-%d %H:%M:%S %Z')
     timestamp_utc_display = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
-    # -------------------------------------------------------------------------
     log_prefix = f"[{source.upper()}]"
 
     if 'bot' not in globals() or not globals().get('bot').is_ready() or not LOG_CHANNEL_ID:
-        # Utiliser l'heure UTC pour les logs stdout si le bot n'est pas prêt
         print(f"[{timestamp_utc_display}] {log_prefix} [LOG STDOUT - CANAL/BOT INDISPONSIBLE] {message_content}")
         return
 
@@ -70,13 +67,10 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
         log_channel_obj = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel_obj:
             max_discord_len = 3800 
-            # --- MODIFICATION: Inclure les deux timestamps dans le message de log Discord ---
             full_log_message = f"{log_prefix} {timestamp_paris_display} ({timestamp_utc_display})\n{message_content}"
-            # ------------------------------------------------------------------------------
-            if len(full_log_message) > max_discord_len: # Vérifier la longueur du message complet
-                # Tronquer message_content si nécessaire, en gardant de la place pour les en-têtes
-                max_content_len = max_discord_len - (len(full_log_message) - len(message_content)) - 50 # Marge de sécurité
-                if max_content_len < 0: max_content_len = 0 # Eviter longueur négative
+            if len(full_log_message) > max_discord_len:
+                max_content_len = max_discord_len - (len(full_log_message) - len(message_content)) - 50 
+                if max_content_len < 0: max_content_len = 0
                 message_content_truncated = message_content[:max_content_len] + "\n... (Tronqué)"
                 full_log_message = f"{log_prefix} {timestamp_paris_display} ({timestamp_utc_display})\n{message_content_truncated}"
 
@@ -87,21 +81,24 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
         print(f"[{timestamp_utc_display}] {log_prefix} [LOG STDOUT] Erreur envoi log Discord: {e}. Msg: {message_content}")
         print(traceback.format_exc())
 
-async def get_ai_analysis(user_query: str, requesting_user_name: str) -> str | None:
+async def get_ai_analysis(user_query: str, requesting_user_name_with_id: str) -> str | None:
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
-        print("AVERTISSEMENT: Tentative d'appel à get_ai_analysis alors qu'Azure OpenAI n'est pas configuré ou client non initialisé.")
-        await send_bot_log_message(f"Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name}", source="AI-QUERY-SQL-GEN")
+        await send_bot_log_message(f"Tentative d'appel à l'IA (analyse SQL) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
         return None
 
     paris_tz = pytz.timezone('Europe/Paris')
     current_time_paris = datetime.datetime.now(paris_tz) 
     system_current_time_reference = current_time_paris.strftime("%Y-%m-%d %H:%M:%S %Z")
-   
+    
+    # Extraire le nom d'utilisateur simple pour le prompt système (sans l'ID)
+    requesting_user_name_for_prompt = requesting_user_name_with_id.split(" (ID:")[0]
+
+
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la conversion de questions en langage naturel en requêtes SQL optimisées pour Azure Cosmos DB.
 Ta tâche est d'analyser la question de l'utilisateur et de générer UNIQUEMENT la requête SQL correspondante pour interroger une base de données Cosmos DB contenant des messages Discord.
 
-L'utilisateur actuel qui pose la question est : {requesting_user_name}
+L'utilisateur actuel qui pose la question est : {requesting_user_name_for_prompt}
 
 Contexte de la base de données :
 - La base de données s'appelle '{DATABASE_NAME}' et le conteneur '{CONTAINER_NAME}'.
@@ -135,7 +132,7 @@ Instructions pour la génération de la requête :
         Donc, la condition est `c.timestamp_iso >= "{(current_time_paris - datetime.timedelta(days=current_time_paris.weekday())).strftime('%Y-%m-%d')}T00:00:00.000Z" AND c.timestamp_iso <= "{(current_time_paris + datetime.timedelta(days=(6 - current_time_paris.weekday()))).strftime('%Y-%m-%d')}T23:59:59.999Z"`
     * "la semaine dernière": Calcule les dates du Lundi au Dimanche de la semaine précédente.
     * "il y a X mois", "en XXXX", "l'année dernière", "le mois dernier": `STARTSWITH("YYYY-MM")` ou `STARTSWITH("YYYY")`.
-5.  Pour filtrer par auteur (nom d'utilisateur), utilise `CONTAINS(c.author_name, "...", true)`. Si l'utilisateur dit "moi", utilise "{requesting_user_name}".
+5.  Pour filtrer par auteur (nom d'utilisateur), utilise `CONTAINS(c.author_name, "...", true)`. Si l'utilisateur dit "moi", utilise "{requesting_user_name_for_prompt}".
 6.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
 7.  **Sélection des champs :** Sélectionne TOUJOURS au minimum `c.id`, `c.channel_id`, `c.guild_id`, `c.author_name`, `c.author_display_name`, `c.content`, et `c.timestamp_iso`. Si "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
 8.  **Ordre de tri :** Par défaut `ORDER BY c.timestamp_iso DESC`. Pour "premier message" ou "plus ancien", utilise `ASC`.
@@ -176,39 +173,39 @@ Question de l'utilisateur :
             completion_tokens = response.usage.completion_tokens
             total_tokens = response.usage.total_tokens
             await send_bot_log_message(
-                f"Utilisation des tokens (SQL Gen): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nDemandé par: {requesting_user_name} pour la question: '{user_query}'",
+                f"Utilisation des tokens (SQL Gen): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nDemandé par: {requesting_user_name_with_id} pour la question: '{user_query}'",
                 source="AI-TOKEN-USAGE"
             )
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             generated_query = response.choices[0].message.content.strip()
             if "NO_QUERY_POSSIBLE" in generated_query:
-                await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'. Demandé par: {requesting_user_name}", source="AI-QUERY-SQL-GEN")
+                await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
                 return "NO_QUERY_POSSIBLE"
             if not generated_query.upper().startswith("SELECT"):
-                await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'. Demandé par: {requesting_user_name}", source="AI-QUERY-SQL-GEN")
+                await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
                 return "INVALID_QUERY_FORMAT"
             return generated_query
         else:
-            await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'. Demandé par: {requesting_user_name}", source="AI-QUERY-SQL-GEN")
+            await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
             print(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI. Réponse complète : {response}")
             return None
     except APIError as e:
-        error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN"); return None
     except APIConnectionError as e:
-        error_message = f"Erreur de connexion Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur de connexion Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN"); return None
     except RateLimitError as e:
-        error_message = f"Erreur de limite de taux Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur de limite de taux Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN"); return None
     except Exception as e:
-        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (SQL Gen) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name}"
+        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (SQL Gen) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-QUERY-SQL-GEN"); return None
 
-async def get_ai_summary(messages_list: list[dict], requesting_user_name: str) -> str | None: # Ajout de requesting_user_name
+async def get_ai_summary(messages_list: list[dict], requesting_user_name_with_id: str) -> str | None:
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
-        await send_bot_log_message(f"Tentative d'appel à l'IA (Synthèse) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name}", source="AI-SUMMARY")
+        await send_bot_log_message(f"Tentative d'appel à l'IA (Synthèse) alors que la configuration Azure OpenAI est manquante ou a échoué. Demandé par: {requesting_user_name_with_id}", source="AI-SUMMARY")
         return None
     if not messages_list:
         return "Aucun message à résumer."
@@ -258,9 +255,9 @@ async def get_ai_summary(messages_list: list[dict], requesting_user_name: str) -
         
         formatted_messages += f"[{author}] ({date_fmt}): {content}\n---\n"
 
-    # --- MODIFICATION: Commenté pour ne plus envoyer ce log spécifique ---
+    # --- Log AI-SUMMARY-DEBUG commenté ---
     # await send_bot_log_message(f"DEBUG Lien: guild_id={first_guild_id_for_link}, chan_id={first_channel_id_for_link}, msg_id={first_message_id_for_link}", source="AI-SUMMARY-DEBUG")
-    # -----------------------------------------------------------------
+    # ------------------------------------
 
     system_prompt = f"""
 Tu es un assistant IA spécialisé dans la synthèse de conversations Discord.
@@ -318,34 +315,34 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
             completion_tokens = response.usage.completion_tokens
             total_tokens = response.usage.total_tokens
             await send_bot_log_message(
-                f"Utilisation des tokens (Synthèse): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nPour {len(messages_to_summarize)} messages. Demandé par: {requesting_user_name}",
+                f"Utilisation des tokens (Synthèse): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}\nPour {len(messages_to_summarize)} messages. Demandé par: {requesting_user_name_with_id}",
                 source="AI-TOKEN-USAGE"
             )
 
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             summary = response.choices[0].message.content.strip()
-            # --- MODIFICATION: Log concis du résumé au lieu du résumé complet ---
-            await send_bot_log_message(f"Résumé IA généré pour {len(messages_to_summarize)} messages (longueur: {len(summary)} caractères). Demandé par: {requesting_user_name}", source="AI-SUMMARY")
-            # -------------------------------------------------------------------
+            # --- Log du résumé complet commenté ---
+            # await send_bot_log_message(f"Résumé IA généré pour {len(messages_to_summarize)} messages (longueur: {len(summary)} caractères). Demandé par: {requesting_user_name_with_id}", source="AI-SUMMARY")
+            # ------------------------------------
             return summary
         else:
-            await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse. Demandé par: {requesting_user_name}", source="AI-SUMMARY")
+            await send_bot_log_message(f"Aucune réponse ou contenu valide reçu d'Azure OpenAI pour la synthèse. Demandé par: {requesting_user_name_with_id}", source="AI-SUMMARY")
             print(f"Aucune réponse IA pour synthèse. Réponse complète : {response}")
             return None
     except APIError as e:
-        error_message = f"Erreur API Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur API Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except APIConnectionError as e:
-        error_message = f"Erreur de connexion Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur de connexion Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except RateLimitError as e:
-        error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name}"
+        error_message = f"Erreur de limite de taux Azure OpenAI (Synthèse) : {e}. Demandé par: {requesting_user_name_with_id}"
         if "context_length_exceeded" in str(e):
-            await send_bot_log_message(f"Erreur de limite de taux (Synthèse) - Dépassement de la longueur du contexte: {e}. Demandé par: {requesting_user_name}", source="AI-SUMMARY")
+            await send_bot_log_message(f"Erreur de limite de taux (Synthèse) - Dépassement de la longueur du contexte: {e}. Demandé par: {requesting_user_name_with_id}", source="AI-SUMMARY")
             return None 
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
     except Exception as e:
-        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (Synthèse) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name}"
+        error_message = f"Erreur inattendue lors de l'appel à Azure OpenAI (Synthèse) : {e}\n{traceback.format_exc()}\nDemandé par: {requesting_user_name_with_id}"
         print(error_message); await send_bot_log_message(error_message, source="AI-SUMMARY"); return None
 
 print("DEBUG: AI functions defined.")
@@ -560,7 +557,7 @@ async def ping(ctx):
 @bot.command(name='ask', help="Pose une question sur l'historique des messages. L'IA tentera de trouver les messages pertinents.")
 async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD"
-    user_name_for_log = f"{ctx.author.name} (ID: {ctx.author.id})" # Pour l'inclure dans les logs
+    user_name_for_log = f"{ctx.author.name} (ID: {ctx.author.id})"
     
     if ALLOWED_USER_IDS_LIST and ctx.author.id not in ALLOWED_USER_IDS_LIST:
         await send_bot_log_message(f"Accès refusé à !ask pour {user_name_for_log}. Question: '{question}'", source=log_source)
@@ -570,12 +567,11 @@ async def ask_command(ctx, *, question: str):
 
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
         await ctx.send("Désolé, le module d'intelligence artificielle n'est pas correctement configuré ou démarré.")
-        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Azure OpenAI non configuré/client non prêt.", source=log_source); return
+        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Azure OpenAI non configuré/client non prêt. Question: '{question}'", source=log_source); return
     if not container_client:
         await ctx.send("Désolé, la connexion à la base de données n'est pas active.")
-        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Client Cosmos DB non initialisé.", source=log_source); return
+        await send_bot_log_message(f"Cmd !ask par {user_name_for_log} échouée : Client Cosmos DB non initialisé. Question: '{question}'", source=log_source); return
 
-    # Passer user_name_for_log pour l'inclure dans les logs d'erreurs potentielles de get_ai_analysis
     generated_sql_query = await get_ai_analysis(question, user_name_for_log) 
     
     if not generated_sql_query:
@@ -585,11 +581,13 @@ async def ask_command(ctx, *, question: str):
     if generated_sql_query == "INVALID_QUERY_FORMAT":
         await ctx.send("L'IA a retourné une réponse dans un format inattendu."); return
 
-    # --- MODIFICATION: Commenté pour ne plus envoyer ce log spécifique ---
+    # --- Log de la requête SQL générée commenté ---
     # await send_bot_log_message(f"Cmd !ask par {user_name_for_log} pour '{question}'. Requête IA : {generated_sql_query}", source=log_source)
-    # -----------------------------------------------------------------
-    # Mais on peut vouloir un log plus simple indiquant que la requête a été générée :
-    await send_bot_log_message(f"Requête SQL générée pour '{question}' par {user_name_for_log}.", source="ASK-CMD-SQL-GEN")
+    # --- Log de la requête SQL générée (version plus simple) commenté ---
+    # await send_bot_log_message(f"Requête SQL générée pour '{question}' par {user_name_for_log}.", source="ASK-CMD-SQL-GEN")
+    # ---------------------------------------------
+    # On garde un log indiquant que la génération SQL a été tentée et réussie (avant exécution)
+    await send_bot_log_message(f"Génération SQL pour '{question}' par {user_name_for_log} terminée. Requête : {generated_sql_query}", source="ASK-CMD-SQL-READY")
 
 
     try:
@@ -607,7 +605,6 @@ async def ask_command(ctx, *, question: str):
             await send_bot_log_message(f"Résultat COUNT pour '{query_to_execute}': {count}. Demandé par: {user_name_for_log}", source=log_source); return
 
         await ctx.send(f"J'ai trouvé {len(items)} message(s). Génération du résumé...") 
-        # Passer user_name_for_log pour l'inclure dans les logs d'erreurs potentielles de get_ai_summary
         ai_summary = await get_ai_summary(items, user_name_for_log) 
 
         if ai_summary:
@@ -628,14 +625,14 @@ async def ask_command(ctx, *, question: str):
             
             log_message_success = (
                 f"Synthèse réussie pour {len(items)} messages.\n"
-                f"Demandé par: {user_name_for_log}.\n"
+                f"Demandé par: {user_name_for_log} pour la question: '{question}'.\n"
                 f"Résumé basé sur les {min(len(items), MAX_MESSAGES_FOR_SUMMARY_CONFIG)} premiers."
             )
             await send_bot_log_message(log_message_success, source=log_source)
         else:
             await ctx.send("Désolé, je n'ai pas réussi à générer de résumé pour ces messages.")
             if not ai_summary : 
-                await send_bot_log_message(f"Synthèse retournée comme None pour {len(items)} messages. Demandé par: {user_name_for_log}", source=log_source)
+                await send_bot_log_message(f"Synthèse retournée comme None pour {len(items)} messages. Demandé par: {user_name_for_log} pour la question: '{question}'", source=log_source)
 
     except exceptions.CosmosHttpResponseError as e:
         error_msg_user = "Une erreur s'est produite lors de la recherche dans la base de données."
@@ -644,10 +641,10 @@ async def ask_command(ctx, *, question: str):
         elif "Request rate is large" in str(e):
              error_msg_user = "Base de données temporairement surchargée. Réessayez plus tard."
         await ctx.send(error_msg_user)
-        await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log}\n{traceback.format_exc()}", source=log_source); print(f"Erreur Cosmos DB: {e}")
+        await send_bot_log_message(f"Erreur Cosmos DB pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} pour la question: '{question}'\n{traceback.format_exc()}", source=log_source); print(f"Erreur Cosmos DB: {e}")
     except Exception as e:
         await ctx.send("Une erreur inattendue s'est produite.")
-        await send_bot_log_message(f"Erreur inattendue dans ask_cmd pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log}\n{traceback.format_exc()}", source=log_source); print(f"Erreur inattendue: {e}")
+        await send_bot_log_message(f"Erreur inattendue dans ask_cmd pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} pour la question: '{question}'\n{traceback.format_exc()}", source=log_source); print(f"Erreur inattendue: {e}")
 
 print("DEBUG: Reaching main execution block.")
 if __name__ == "__main__":
