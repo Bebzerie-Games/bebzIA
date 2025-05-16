@@ -296,6 +296,20 @@ Chaque message est séparé par une ligne "---".
 Ton objectif est de lire attentivement ces messages et de fournir un résumé concis et cohérent de la discussion qu'ils représentent.
 Mets en évidence les sujets principaux, les points clés, et les informations importantes partagées.
 Le résumé doit être un texte fluide, en français, et ne doit pas citer les messages textuellement.
+Pour les pseudos des utilisateurs donc "author_name" ou "author_display_name", les noms réels des personnes sont : 
+Lamerdeoffline ou Lamerde: Luka
+FlyXOwl ou Fly: Théo
+airzya ou azyria : Vincent
+wkda_ledauphin ou ledauphin : Nathan
+viv1dvivi ou vivi ou vivihihihi : victoire mais appelle la vivi
+will.connect ou will : Justin
+bastos0234 ou bastos : Bastien
+ttv_yunix ou yunix : Liam
+.fantaman ou fantaman : Khelyan
+    - Tu peux les tutoyer dans tes réponses.
+    - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
+    - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
+    - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 250 mots).
 """
 
