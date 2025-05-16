@@ -8,7 +8,8 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import traceback # Pour les logs d'erreur détaillés
 import pytz
 import dateutil.parser # Importé pour un parsing de date plus robuste
-import sys # Ajouté pour sys.exit()
+import sys 
+import collections # Ajouté pour collections.deque
 
 print("DEBUG: Script starting...")
 
@@ -28,6 +29,7 @@ AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 print("DEBUG: Env variables loaded.")
 
 MAX_MESSAGES_FOR_SUMMARY_CONFIG = 100 
+GLOBAL_ASK_COMMAND_LOGS = collections.deque(maxlen=50) # Journal global pour !caca
 
 from openai import AsyncAzureOpenAI, APIError, APIConnectionError, RateLimitError
 
@@ -55,7 +57,23 @@ async def send_bot_log_message(message_content: str, source: str = "BOT"):
     now_utc = discord.utils.utcnow()
     timestamp_utc_display = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
     log_prefix = f"[{source.upper()}]"
+    
+    # Toujours imprimer en console
     print(f"[{timestamp_utc_display}] {log_prefix} {message_content}")
+
+    # Ajouter aux logs globaux si pertinent pour !caca
+    source_upper = source.upper()
+    if source_upper.startswith("ASK-CMD") or \
+       source_upper.startswith("AI-QUERY-SQL-GEN") or \
+       source_upper.startswith("AI-SUMMARY") or \
+       source_upper == "AI-TOKEN-USAGE": # Ajout de AI-TOKEN-USAGE pour tracer les coûts si besoin dans !caca
+        
+        log_entry_for_caca = f"{timestamp_utc_display} {log_prefix} {message_content}"
+        max_single_log_entry_len = 500 
+        if len(log_entry_for_caca) > max_single_log_entry_len:
+            log_entry_for_caca = log_entry_for_caca[:max_single_log_entry_len - 20] + "... (entry truncated)"
+        GLOBAL_ASK_COMMAND_LOGS.append(log_entry_for_caca)
+
 
 async def get_ai_analysis(user_query: str, requesting_user_name_with_id: str) -> str | None:
     if not IS_AZURE_OPENAI_CONFIGURED or not azure_openai_client:
@@ -120,7 +138,6 @@ Instructions pour la génération de la requête :
             frequency_penalty=0, presence_penalty=0, stop=None
         )
         
-        # Log d'utilisation des tokens (uniquement en console via send_bot_log_message)
         if response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
@@ -133,14 +150,14 @@ Instructions pour la génération de la requête :
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             generated_query = response.choices[0].message.content.strip()
             if "NO_QUERY_POSSIBLE" in generated_query:
-                await send_bot_log_message(f"L'IA a déterminé qu'aucune requête n'est possible pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
+                await send_bot_log_message(f"L'IA a déterminé 'NO_QUERY_POSSIBLE' pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
                 return "NO_QUERY_POSSIBLE"
             if not generated_query.upper().startswith("SELECT"):
-                await send_bot_log_message(f"L'IA a retourné une réponse inattendue (non SELECT) : '{generated_query}' pour la question : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
+                await send_bot_log_message(f"L'IA a retourné un format invalide (non SELECT) : '{generated_query}' pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
                 return "INVALID_QUERY_FORMAT"
             return generated_query
         else:
-            await send_bot_log_message(f"Aucune réponse ou contenu de message valide reçu d'Azure OpenAI pour la question : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
+            await send_bot_log_message(f"Aucune réponse ou contenu de message valide d'Azure OpenAI pour : '{user_query}'. Demandé par: {requesting_user_name_with_id}", source="AI-QUERY-SQL-GEN")
             return None
     except APIError as e:
         error_message = f"Erreur API Azure OpenAI (SQL Gen) : {e}. Demandé par: {requesting_user_name_with_id}"
@@ -227,7 +244,6 @@ Essaie de maintenir le résumé relativement court (quelques phrases, idéalemen
             frequency_penalty=0, presence_penalty=0, stop=None
         )
 
-        # Log d'utilisation des tokens (uniquement en console via send_bot_log_message)
         if response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
@@ -356,7 +372,7 @@ async def main_message_fetch_logic():
             try: container_client.upsert_item(body=message_json)
             except Exception as e_upsert:
                  await send_bot_log_message(f"ERREUR upsert msg {message_json['id']}: {e_upsert}", source=log_source) 
-            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0: # Modifié pour éviter le log à chaque message
+            if fetched_in_pass > 0 and fetched_in_pass % 500 == 0: 
                 await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités...", source=log_source)
         await send_bot_log_message(f"Récupération terminée pour '{channel_to_fetch.name}'. {fetched_in_pass} messages traités.", source=log_source)
     except Exception as e:
@@ -395,6 +411,9 @@ async def ask_command(ctx, *, question: str):
     log_source = "ASK-CMD" 
     user_name_for_log = f"{ctx.author.name} (ID: {ctx.author.id})"
     
+    # Log initial de la commande !ask
+    await send_bot_log_message(f"Commande !ask reçue de {user_name_for_log}. Question: '{question}'", source=f"{log_source}-INIT")
+
     if ALLOWED_USER_IDS_LIST and ctx.author.id not in ALLOWED_USER_IDS_LIST:
         await send_bot_log_message(f"Accès refusé à !ask pour {user_name_for_log}. Question: '{question}'", source=log_source)
         await ctx.send("Désolé, cette commande est actuellement restreinte."); return
@@ -434,10 +453,12 @@ async def ask_command(ctx, *, question: str):
         if ai_summary:
             MAX_EMBED_DESC_LENGTH = 4000 
             MAX_FALLBACK_MSG_LENGTH = 1900 
+            TRUNCATION_SUFFIX = "\n... (Résumé tronqué)"
+            TRUNCATION_MARGIN = len(TRUNCATION_SUFFIX) + 5 # Marge de sécurité
 
             truncated_summary_for_embed = ai_summary
             if len(ai_summary) > MAX_EMBED_DESC_LENGTH:
-                truncated_summary_for_embed = ai_summary[:MAX_EMBED_DESC_LENGTH - 25] + "\n... (Résumé tronqué)" # -25 pour marge
+                truncated_summary_for_embed = ai_summary[:MAX_EMBED_DESC_LENGTH - TRUNCATION_MARGIN] + TRUNCATION_SUFFIX
                 await send_bot_log_message(f"Résumé IA tronqué pour l'embed (original: {len(ai_summary)}, tronqué: {len(truncated_summary_for_embed)}). Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
 
             embed = discord.Embed(
@@ -454,15 +475,16 @@ async def ask_command(ctx, *, question: str):
                 await send_bot_log_message(f"Erreur lors de l'envoi de l'embed (sera tenté en message normal): {e_embed_send}. Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
                 
                 fallback_message_header = f"**Résumé ({len(items)} msgs):**\n"
-                # Note: e_embed_send peut être long, donc on utilise un message d'erreur générique
                 fallback_message_footer = f"\n*(Le résumé était trop long pour un embed. Version texte ci-dessus.)*" 
                 
                 remaining_space_for_summary = MAX_FALLBACK_MSG_LENGTH - len(fallback_message_header) - len(fallback_message_footer)
                 
                 truncated_summary_for_fallback = ai_summary
                 if len(ai_summary) > remaining_space_for_summary:
-                    truncated_summary_for_fallback = ai_summary[:remaining_space_for_summary - 25] + "\n... (Résumé tronqué)" # -25 pour marge
+                    truncated_summary_for_fallback = ai_summary[:remaining_space_for_summary - TRUNCATION_MARGIN] + TRUNCATION_SUFFIX
                     await send_bot_log_message(f"Résumé IA tronqué pour le message de fallback (original: {len(ai_summary)}, tronqué: {len(truncated_summary_for_fallback)}). Demandé par {user_name_for_log} Q: '{question}'", source=log_source)
+                else:
+                    truncated_summary_for_fallback = ai_summary # Pas besoin de tronquer si ça rentre
 
                 try:
                     await ctx.send(f"{fallback_message_header}{truncated_summary_for_fallback}{fallback_message_footer}")
@@ -489,6 +511,57 @@ async def ask_command(ctx, *, question: str):
     except Exception as e:
         await ctx.send("Une erreur inattendue s'est produite.")
         await send_bot_log_message(f"Erreur inattendue ask_cmd pour '{generated_sql_query}': {e}\nDemandé par: {user_name_for_log} Q: '{question}'\n{traceback.format_exc()}", source=log_source)
+
+@bot.command(name='caca', help="Affiche les 50 derniers logs pertinents des commandes !ask.")
+async def caca_command(ctx):
+    log_source = "CACA-CMD" 
+    user_name_for_log = f"{ctx.author.name} (ID: {ctx.author.id})"
+
+    if ALLOWED_USER_IDS_LIST and ctx.author.id not in ALLOWED_USER_IDS_LIST:
+        await send_bot_log_message(f"Accès refusé à !caca pour {user_name_for_log}.", source=log_source)
+        await ctx.send("Désolé, cette commande est actuellement restreinte."); return
+
+    if not GLOBAL_ASK_COMMAND_LOGS:
+        await ctx.send("Aucun log de commande !ask n'a encore été enregistré."); return
+
+    embed = discord.Embed(
+        title="🚽 Derniers Logs des Commandes !ask",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    
+    description_content_parts = []
+    current_length = 0
+    MAX_DESC_LENGTH = 4000 
+    TRUNCATION_EMBED_NOTICE = "\n... (plus de logs tronqués pour tenir dans l'embed)"
+
+    logs_to_display = list(GLOBAL_ASK_COMMAND_LOGS) 
+
+    for log_entry in reversed(logs_to_display): 
+        entry_with_newline = log_entry + "\n"
+        if current_length + len(entry_with_newline) <= MAX_DESC_LENGTH:
+            description_content_parts.append(entry_with_newline)
+            current_length += len(entry_with_newline)
+        else:
+            # Vérifier si on peut ajouter le message de troncature
+            if current_length + len(TRUNCATION_EMBED_NOTICE) <= MAX_DESC_LENGTH:
+                description_content_parts.append(TRUNCATION_EMBED_NOTICE)
+            await send_bot_log_message(f"!caca: Description de l'embed tronquée. Demandé par {user_name_for_log}", source=log_source)
+            break 
+            
+    if not description_content_parts:
+        embed.description = "Aucun log à afficher ou problème de formatage."
+    else:
+        embed.description = "".join(description_content_parts)
+        
+    embed.set_footer(text=f"Affichage des logs les plus récents.")
+
+    try:
+        await ctx.send(embed=embed)
+    except discord.HTTPException as e:
+        await send_bot_log_message(f"Erreur envoi embed !caca: {e}. Demandé par {user_name_for_log}", source=log_source)
+        await ctx.send("Erreur lors de la création de l'embed des logs. Les logs sont peut-être trop volumineux.")
+
 
 if __name__ == "__main__":
     if DISCORD_BOT_TOKEN:
