@@ -158,7 +158,7 @@ Exemples (date de référence 2025-05-16 Paris) :
 - Utilisateur: "messages de bob"
   IA: SELECT * FROM c WHERE CONTAINS(c.author_name, "bob", true) ORDER BY c.timestamp_iso DESC
 - Utilisateur: "Qui a dit 'exemple' pour la première fois ?"
-  IA: SELECT TOP 1 c.author_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.content, "exemple", true) ORDER BY c.timestamp_iso ASC
+  IA: SELECT TOP 1 c.id, c.channel_id, c.author_name, c.author_display_name, c.content, c.timestamp_iso FROM c WHERE CONTAINS(c.content, "exemple", true) ORDER BY c.timestamp_iso ASC
 - Utilisateur: "auteur du premier message contenant 'exemple'"
   IA: SELECT TOP 1 c.author_name FROM c WHERE CONTAINS(c.content, "exemple", true) ORDER BY c.timestamp_iso ASC
 
