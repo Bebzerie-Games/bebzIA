@@ -317,7 +317,7 @@ ttv_yunix ou yunix : Liam
     - Tu peux les appeler par leur pseudo ou leur nom réel, selon le contexte de la question.
     - Tu peux utiliser les deux noms dans la même réponse si tu le souhaites.
     - Tu peux aussi utiliser des variantes comme "Lamerdeoffline" ou "Lamerde" selon le contexte de la question.
-Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du message a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (remplace "channel_id" par l'ID du canal et "id" par l'ID du message).
+Essaie de toujours donner le nom de la personne qui a envoyé le message a partir de son pseudo ou de son nom réel comme indiqué ci-dessus. ainsi que le lien du premier message (si il y'en a plusieurs sinon un seul) a la fin de ton résumé au format suivant : https://discord.com/channels/channel_id/id (remplace "channel_id" par l'ID du canal et "id" par l'ID du message).
 Essaie de maintenir le résumé relativement court (quelques phrases, idéalement moins de 300 mots).
 """
 
