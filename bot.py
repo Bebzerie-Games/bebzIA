@@ -8,6 +8,8 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import traceback # Pour les logs d'erreur détaillés
 import pytz
 
+print("DEBUG: Script starting...") # AJOUT DEBUG
+
 # Charger les variables d'environnement
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -21,6 +23,8 @@ LOG_CHANNEL_ID_STR = os.getenv("LOG_CHANNEL_ID")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
 AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+
+print("DEBUG: Env variables loaded.") # AJOUT DEBUG
 
 
 # --- Configuration Azure OpenAI (Nouvelle API v1.x.x) ---
@@ -44,6 +48,8 @@ if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY and AZURE_OPENAI_DEPLOYMENT_NAME:
         azure_openai_client = None # S'assurer qu'il est None en cas d'échec
 else:
     print("AVERTISSEMENT: Variables d'environnement pour Azure OpenAI manquantes ou incomplètes. Les fonctionnalités IA seront désactivées.")
+
+print("DEBUG: Azure OpenAI init complete.") # AJOUT DEBUG
 
 # --- Définition de send_bot_log_message (avec paramètre source) ---
 async def send_bot_log_message(message_content: str, source: str = "BOT"):
@@ -131,7 +137,7 @@ Instructions pour la génération de la requête :
 6.  Utilise `c.reactions_count` ou `c.attachments_count` si besoin.
 7.  Si la question est vague, retourne la chaîne "NO_QUERY_POSSIBLE".
 8.  Par défaut, trie par `ORDER BY c.timestamp_iso DESC`.
-9.  Pour "combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
+9.  Pour " combien", utilise `SELECT VALUE COUNT(1) FROM c WHERE ...`.
 10. Pour limiter le nombre de résultats retournés (par exemple, "le dernier message", "les 5 messages les plus récents"), utilise la clause `TOP N` (où N est le nombre désiré) **juste après le `SELECT`**.
 
 Exemples (date de référence 2025-05-16 Paris) :
@@ -209,19 +215,19 @@ Question de l'utilisateur :
         await send_bot_log_message(error_message, source="AI-QUERY")
         return None
 
+print("DEBUG: AI functions defined.") # AJOUT DEBUG
+
 # --- Configuration des Intents et du Bot ---
+print("DEBUG: Initializing Discord Intents and Bot...") # AJOUT DEBUG
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.guilds = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
+print("DEBUG: Discord Bot object created.") # AJOUT DEBUG
 
 # --- Conversion des IDs de canaux ---
-TARGET_CHANNEL_ID = None
-LOG_CHANNEL_ID = None
-ALLOWED_USER_ID = None
-
+print("DEBUG: Converting IDs...") # AJOUT DEBUG
 try:
     if TARGET_CHANNEL_ID_STR: TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID_STR)
     if LOG_CHANNEL_ID_STR: LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_STR)
@@ -230,8 +236,10 @@ try:
     # ---------------------------------------
 except ValueError:
     print("ERREUR CRITIQUE: Un ID (canal ou utilisateur) n'est pas un entier valide.")
+print("DEBUG: ID conversion complete.") # AJOUT DEBUG
 
 # --- Initialisation du client Cosmos DB ---
+print("DEBUG: Initializing Cosmos DB...") # AJOUT DEBUG
 cosmos_client_instance_global = None
 container_client = None
 if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
@@ -250,6 +258,7 @@ if COSMOS_DB_ENDPOINT and COSMOS_DB_KEY and DATABASE_NAME and CONTAINER_NAME:
         container_client = None
 else:
     print("AVERTISSEMENT: Variables d'environnement pour Cosmos DB manquantes. La récupération des messages sera désactivée.")
+print("DEBUG: Cosmos DB init complete.") # AJOUT DEBUG
 
 # --- Fonctions utilitaires ---
 def format_message_to_json(message: discord.Message):
@@ -316,60 +325,4 @@ async def main_message_fetch_logic():
     # Définis cette variable sur une date HISTORIQUE pour forcer une récupération complète.
     # METS CETTE LIGNE EN COMMENTAIRE (ou sur None) APRES AVOIR FAIT LA RECUPERATION HISTORIQUE !
     # force_historical_fetch_from = datetime.datetime(2022, 10, 1, tzinfo=datetime.timezone.utc) # <-- COMMENTEZ OU DEFINISSEZ SUR NONE
-    force_historical_fetch_from = None # <-- DÉFINI À NONE POUR REPRENDRE LE COMPORTEMENT NORMAL
-
-    if force_historical_fetch_from:
-        # Si on force une date historique, on utilise celle-ci.
-        after_date = force_historical_fetch_from
-        await send_bot_log_message(f"Récupération historique FORCÉE depuis {after_date.isoformat()}.", source=log_source)
-    else:
-        # Logique normale : reprendre après le dernier message stocké en base.
-        last_message_timestamp_unix = 0
-        try:
-            query = f"SELECT VALUE MAX(c.timestamp_unix) FROM c WHERE c.channel_id = '{str(TARGET_CHANNEL_ID)}'"
-            results = list(container_client.query_items(query=query, enable_cross_partition_query=True))
-            if results and results[0] is not None:
-                last_message_timestamp_unix = results[0]
-        except Exception as e:
-            await send_bot_log_message(f"AVERTISSEMENT: Récupération MAX timestamp échouée: {e}. Utilisation de la période par défaut.", source=log_source)
-
-        if last_message_timestamp_unix > 0:
-            # On ajoute 0.001 seconde pour ne pas refetcher le dernier message déjà stocké
-            after_date = datetime.datetime.fromtimestamp(last_message_timestamp_unix + 0.001, tz=datetime.timezone.utc)
-            await send_bot_log_message(f"Dernier msg stocké: {after_date.isoformat()}. Récupération après.", source=log_source)
-        else:
-            # Si aucun message précédent trouvé (base vide ou erreur), remonter sur les 14 derniers jours.
-            after_date = discord.utils.utcnow() - datetime.timedelta(days=14)
-            await send_bot_log_message(f"Aucun msg précédent/erreur MAX timestamp. Récupération depuis {after_date.isoformat()} (par défaut).", source=log_source)
-    # --- Fin de la configuration de la date de départ ---
-
-    # --- Début de la boucle de fetch Discord ---
-    await send_bot_log_message(f"Lancement de channel_to_fetch.history(after={after_date.isoformat()}, oldest_first=True, limit=None)..", source=log_source)
-
-    fetched_in_pass = 0
-
-    async for message in channel_to_fetch.history(limit=None, after=after_date, oldest_first=True):
-        fetched_in_pass +=1
-        message_json = format_message_to_json(message)
-        item_id = message_json["id"]
-
-        # --- Logique de récupération et stockage avec upsert_item ---
-        try:
-            container_client.upsert_item(body=message_json)
-        except exceptions.CosmosHttpResponseError as e_upsert:
-             await send_bot_log_message(f"ERREUR Cosmos (upsert) msg {item_id}: {e_upsert.message}", source=log_source)
-        except Exception as e:
-             await send_bot_log_message(f"ERREUR Inattendue pendant upsert msg {item_id}: {e}\n{traceback.format_exc()}", source=log_source)
-
-        
-        if fetched_in_pass > 0 and fetched_in_pass % 500 == 0:
-            await send_bot_log_message(f"Progression: {fetched_in_pass} messages traités/mis à jour...", source=log_source)
-
-    # --- Résumé de la tâche ---
-    summary_message = (f"Récupération terminée pour '{channel_to_fetch.name}'.\n"
-                        f"- Messages traités/mis à jour : {fetched_in_pass}")
-    await send_bot_log_message(summary_message, source=log_source)
-
-    # NOTE: Le bloc except Exception as e: à la fin de la fonction principale
-    # gère les erreurs *pendant* la boucle history, pas avant que channel_to_fetch soit défini.
-    # Les exceptions spécifiques discord.NotFound et discord.Forbidden sont maintenant gérées plus tôt.
+    force_historical_fetch_from = None # <-- DÉFINI À NONE POUR REPRENDRE LE
