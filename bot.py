@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import traceback # Pour les logs d'erreur détaillés
 import pytz
+import dateutil.parser
 
 print("DEBUG: Script starting...") # AJOUT DEBUG
 
@@ -542,36 +543,54 @@ async def ask_command(ctx, *, question: str):
 
 
 # --- Formatage de la date ---
-            date_fmt = "Date invalide ou manquante" # Valeur par défaut
-            timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
+        date_fmt = "Date invalide ou manquante" # Valeur par défaut
+        timestamp_str = item.get("timestamp_iso") # Tente de récupérer la date via la clé 'timestamp_iso' (format actuel)
 
-            # Si 'timestamp_iso' n'est pas trouvé, essaie l'ancienne clé 'timestamp'
-            if timestamp_str is None:
-                timestamp_str = item.get("timestamp") 
+        # Fallback à l'ancienne clé si la nouvelle n'est pas trouvée
+        if timestamp_str is None:
+            timestamp_str = item.get("timestamp") 
 
-            if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
+        dt_obj = None # Initialise l'objet date à None
+
+        if timestamp_str: # S'assurer qu'on a une chaîne de date à traiter
+            try:
+                # Tente de parser la date en utilisant fromisoformat() (standard et rapide)
+                dt_obj = datetime.datetime.fromisoformat(timestamp_str)
+
+            except ValueError:
+                # Si fromisoformat() échoue (par exemple, format non standard),
+                # essaie de parser avec dateutil.parser.isoparse (plus flexible)
                 try:
-                    # Utilise fromisoformat() directement. Il gère la plupart des formats ISO 8601
-                    dt_obj = datetime.datetime.fromisoformat(timestamp_str)
+                     dt_obj = dateutil.parser.isoparse(timestamp_str)
+                except Exception as e_parse:
+                     # Si les deux méthodes de parsing échouent, log l'erreur et utilise le format de secours
+                     print(f"Erreur parsing date avec fromisoformat et dateutil pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e_parse}\n{traceback.format_exc()}")
+                     date_fmt = f"Format date inconnu ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne pour debug
+                     # dt_obj reste None dans ce cas
 
-                    # Si fromisoformat() ne rend pas l'objet conscient du fuseau horaire,
-                    # assume qu'il est en UTC (car c'est le format que notre fetcher utilise)
+            if dt_obj: # Si le parsing a réussi avec l'une des méthodes
+                try:
+                    # S'assurer que l'objet datetime est conscient du fuseau horaire.
+                    # fromisoformat/isoparse devrait le faire si le Z ou l'offset est présent,
+                    # mais cette vérification ajoute de la robustesse.
                     if dt_obj.tzinfo is None:
+                         # Si pas de timezone info, assume UTC (car notre fetcher vise UTC)
                          dt_obj = dt_obj.replace(tzinfo=datetime.timezone.utc)
 
-                    # Convertir en heure de Paris pour l'affichage
+                    # Convertir l'objet date en heure de Paris pour l'affichage
                     paris_tz = pytz.timezone('Europe/Paris')
                     dt_paris = dt_obj.astimezone(paris_tz)
-                    
-                    # Formater la date pour l'affichage
+
+                    # Formater la date pour l'affichage final
                     date_fmt = dt_paris.strftime("%d/%m/%Y à %H:%M")
 
-                except Exception as e:
-                    # Log l'erreur de formatage de date détaillée pour debug si ça échoue encore
-                    print(f"Erreur formatage date pour timestamp '{timestamp_str}' (ID: {item.get('id', 'N/A')}): {e}\n{traceback.format_exc()}")
-                    # Affiche le début de la chaîne de timestamp dans le message d'erreur Discord
-                    date_fmt = f"Format date inconnu ({timestamp_str[:30]}...)" 
-            # -------------------------------------------------------------
+                except Exception as e_tz_format:
+                    # Log les erreurs pendant la conversion de fuseau horaire ou le formatage final
+                    print(f"Erreur conversion/formatage timezone pour dt_obj '{dt_obj}' (timestamp '{timestamp_str}', ID: {item.get('id', 'N/A')}): {e_tz_format}\n{traceback.format_exc()}")
+                    date_fmt = f"Erreur conversion date ({timestamp_str[:35]}...)" # Affiche une partie de la chaîne d'origine
+
+
+        # -------------------------------------------------------------
 
             display_content = (content[:150] + '...') if len(content) > 150 else content
 
